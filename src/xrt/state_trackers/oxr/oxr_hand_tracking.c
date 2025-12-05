@@ -80,24 +80,19 @@ XrResult
 oxr_hand_tracker_create(struct oxr_logger *log,
                         struct oxr_session *sess,
                         const XrHandTrackerCreateInfoEXT *createInfo,
+                        struct xrt_device *override_xdev,
                         struct oxr_hand_tracker **out_hand_tracker)
 {
-	if (!oxr_system_get_hand_tracking_support(log, sess->sys->inst)) {
-		return oxr_error(log, XR_ERROR_FEATURE_UNSUPPORTED, "System does not support hand tracking");
-	}
-
-	struct oxr_hand_tracker *hand_tracker = NULL;
-	OXR_ALLOCATE_HANDLE_OR_RETURN(log, hand_tracker, OXR_XR_DEBUG_HTRACKER, oxr_hand_tracker_destroy_cb,
-	                              &sess->handle);
-
-	hand_tracker->sess = sess;
-	hand_tracker->hand = createInfo->hand;
-	hand_tracker->hand_joint_set = createInfo->handJointSet;
+	// Use variables to avoid creating the hand tracker object until we know it's valid.
+	struct oxr_hand_tracking_data_source unobstructed = XRT_STRUCT_INIT;
+	struct oxr_hand_tracking_data_source conforming = XRT_STRUCT_INIT;
 
 #define OXR_SET_HT_DATA_SOURCE(SRC, SRC_TYPE)                                                                          \
 	{                                                                                                              \
 		struct xrt_device *xdev = NULL;                                                                        \
-		if (createInfo->hand == XR_HAND_LEFT_EXT) {                                                            \
+		if (override_xdev != NULL) {                                                                           \
+			xdev = override_xdev;                                                                          \
+		} else if (createInfo->hand == XR_HAND_LEFT_EXT) {                                                     \
 			xdev = GET_STATIC_XDEV_BY_ROLE(sess->sys, hand_tracking_##SRC##_left);                         \
 		} else if (createInfo->hand == XR_HAND_RIGHT_EXT) {                                                    \
 			xdev = GET_STATIC_XDEV_BY_ROLE(sess->sys, hand_tracking_##SRC##_right);                        \
@@ -109,22 +104,38 @@ oxr_hand_tracker_create(struct oxr_logger *log,
 			                                              : XRT_INPUT_HT_##SRC_TYPE##_RIGHT;               \
 			struct xrt_input *input = NULL;                                                                \
 			if (oxr_xdev_find_input(xdev, ht_input_name, &input) && input != NULL) {                       \
-				hand_tracker->SRC = (struct oxr_hand_tracking_data_source){                            \
+				SRC = (struct oxr_hand_tracking_data_source){                                          \
 				    .xdev = xdev,                                                                      \
 				    .input_name = ht_input_name,                                                       \
 				};                                                                                     \
 			}                                                                                              \
 		}                                                                                                      \
                                                                                                                        \
-		if (xdev != NULL && hand_tracker->SRC.xdev == NULL)                                                    \
+		if (xdev != NULL && SRC.xdev == NULL && override_xdev == NULL) {                                       \
 			oxr_warn(log, "We got hand tracking xdev (%s) but it didn't have a hand tracking input.",      \
 			         #SRC);                                                                                \
+		}                                                                                                      \
 	}
 
 	// Find the assigned device.
 	OXR_SET_HT_DATA_SOURCE(unobstructed, UNOBSTRUCTED)
 	OXR_SET_HT_DATA_SOURCE(conforming, CONFORMING)
 #undef OXR_SET_HT_DATA_SOURCE
+
+	if (unobstructed.xdev == NULL && conforming.xdev == NULL) {
+		return oxr_error(log, XR_ERROR_FEATURE_UNSUPPORTED,
+		                 "Did not find any hand-tracking inputs on XDev that matched the given hand.");
+	}
+
+	struct oxr_hand_tracker *hand_tracker = NULL;
+	OXR_ALLOCATE_HANDLE_OR_RETURN(log, hand_tracker, OXR_XR_DEBUG_HTRACKER, oxr_hand_tracker_destroy_cb,
+	                              &sess->handle);
+
+	hand_tracker->sess = sess;
+	hand_tracker->hand = createInfo->hand;
+	hand_tracker->hand_joint_set = createInfo->handJointSet;
+	hand_tracker->unobstructed = unobstructed;
+	hand_tracker->conforming = conforming;
 
 	hand_tracker->requested_sources_count = ARRAY_SIZE(hand_tracker->requested_sources);
 	hand_tracker->requested_sources[0] = &hand_tracker->unobstructed;

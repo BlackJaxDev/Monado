@@ -92,6 +92,7 @@ XrResult
 oxr_hand_tracker_create(struct oxr_logger *log,
                         struct oxr_session *sess,
                         const XrHandTrackerCreateInfoEXT *createInfo,
+                        struct xrt_device *override_xdev,
                         struct oxr_hand_tracker **out_hand_tracker);
 
 XrResult

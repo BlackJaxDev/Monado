@@ -837,6 +837,12 @@ oxr_xdev_list_space_create(struct oxr_logger *log,
                            uint32_t index,
                            struct oxr_space **out_space);
 
+bool
+oxr_xdev_list_get_xdev(struct oxr_logger *log,
+                       struct oxr_xdev_list *xdl,
+                       XrXDevIdMNDX id,
+                       struct xrt_device **out_xdev);
+
 #endif // OXR_HAVE_MNDX_xdev_space
 
 
