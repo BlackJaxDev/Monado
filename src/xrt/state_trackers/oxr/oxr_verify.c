@@ -438,6 +438,34 @@ oxr_verify_extensions(struct oxr_logger *log, const struct oxr_extension_status 
 }
 
 XrResult
+oxr_verify_action_sets_array(struct oxr_logger *log,
+                             uint32_t countActionSets,
+                             const XrActionSet *actionSets,
+                             const char *variable_name)
+{
+	if (countActionSets == 0 || actionSets == NULL) {
+		return oxr_error(log, XR_ERROR_VALIDATION_FAILURE,
+		                 "(%s) countActionSets must be > 0 and actionSets must be non-NULL", variable_name);
+	}
+
+	for (uint32_t i = 0; i < countActionSets; i++) {
+		if (actionSets[i] == XR_NULL_HANDLE) {
+			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u]) is XR_NULL_HANDLE", variable_name, i);
+		}
+		struct oxr_action_set *act_set = XRT_CAST_OXR_HANDLE_TO_PTR(struct oxr_action_set *, actionSets[i]);
+		if (act_set->handle.debug != OXR_XR_DEBUG_ACTIONSET) {
+			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u]) is not a valid XrActionSet",
+			                 variable_name, i);
+		}
+		if (act_set->handle.state != OXR_HANDLE_STATE_LIVE) {
+			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u]) is not live", variable_name, i);
+		}
+	}
+
+	return XR_SUCCESS;
+}
+
+XrResult
 oxr_verify_view_config_type(struct oxr_logger *log,
                             struct oxr_instance *inst,
                             XrViewConfigurationType view_conf,

@@ -175,6 +175,8 @@ oxr_xrAttachSessionActionSets(XrSession session, const XrSessionActionSetsAttach
 
 	struct oxr_session *sess;
 	struct oxr_logger log;
+	XrResult ret;
+
 	OXR_VERIFY_SESSION_AND_INIT_LOG(&log, session, sess, "xrAttachSessionActionSets");
 	OXR_VERIFY_SESSION_NOT_LOST(&log, sess);
 	OXR_VERIFY_ARG_TYPE_AND_NOT_NULL(&log, bindInfo, XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO);
@@ -191,9 +193,13 @@ oxr_xrAttachSessionActionSets(XrSession session, const XrSessionActionSetsAttach
 		                 "at least one action set.");
 	}
 
-	for (uint32_t i = 0; i < bindInfo->countActionSets; i++) {
-		struct oxr_action_set *act_set = NULL;
-		OXR_VERIFY_ACTIONSET_NOT_NULL(&log, bindInfo->actionSets[i], act_set);
+	ret = oxr_verify_action_sets_array( //
+	    &log,                           //
+	    bindInfo->countActionSets,      //
+	    bindInfo->actionSets,           //
+	    "bindInfo->actionSets");        //
+	if (ret != XR_SUCCESS) {
+		return ret;
 	}
 
 	return oxr_session_attach_action_sets(&log, sess, bindInfo);
