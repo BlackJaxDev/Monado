@@ -152,16 +152,14 @@ oxr_xrSyncActions(XrSession session, const XrActionsSyncInfo *syncInfo)
 	}
 #endif
 
-	for (uint32_t i = 0; i < syncInfo->countActiveActionSets; i++) {
-		struct oxr_action_set *act_set = NULL;
-
-		OXR_VERIFY_ACTIONSET_NOT_NULL(&log, syncInfo->activeActionSets[i].actionSet, act_set);
-
-		XrResult res = oxr_verify_subaction_path_sync(&log, sess->sys->inst, act_set,
-		                                              syncInfo->activeActionSets[i].subactionPath, i);
-		if (res != XR_SUCCESS) {
-			return res;
-		}
+	XrResult ret = oxr_verify_active_action_sets_sync( //
+	    &log,                                          //
+	    sess->sys->inst,                               //
+	    syncInfo->countActiveActionSets,               //
+	    syncInfo->activeActionSets,                    //
+	    "syncInfo->activeActionSets");                 //
+	if (ret != XR_SUCCESS) {
+		return ret;
 	}
 
 	return oxr_action_sync_data(&log, sess, syncInfo->countActiveActionSets, syncInfo->activeActionSets,

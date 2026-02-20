@@ -456,6 +456,23 @@ oxr_verify_action_sets_array(struct oxr_logger *log,
                              const XrActionSet *actionSets,
                              const char *variable_name);
 
+/*!
+ * Verify an array of active action sets for xrSyncActions: each action set
+ * handle is valid and each subaction path is valid for that action set.
+ *
+ * @param log Logger for error reporting.
+ * @param inst Instance for path verification.
+ * @param countActiveActionSets Number of active action sets in the array.
+ * @param activeActionSets Array of XrActiveActionSet must be non-NULL.
+ * @param variable_name Name of the argument for error messages (e.g. "syncInfo->activeActionSets").
+ */
+XrResult
+oxr_verify_active_action_sets_sync(struct oxr_logger *log,
+                                   const struct oxr_instance *inst,
+                                   uint32_t countActiveActionSets,
+                                   const XrActiveActionSet *activeActionSets,
+                                   const char *variable_name);
+
 XrResult
 oxr_verify_extensions(struct oxr_logger *log, const struct oxr_extension_status *extensions);
 
