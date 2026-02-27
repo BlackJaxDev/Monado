@@ -179,7 +179,11 @@ oxr_xrAttachSessionActionSets(XrSession session, const XrSessionActionSetsAttach
 	OXR_VERIFY_SESSION_NOT_LOST(&log, sess);
 	OXR_VERIFY_ARG_TYPE_AND_NOT_NULL(&log, bindInfo, XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO);
 
-	if (oxr_session_action_context_has_attached_act_sets(&sess->action_context)) {
+	// Convenience
+	struct oxr_instance_action_context *inst_context = sess->sys->inst->action_context;
+	struct oxr_session_action_context *sess_context = &sess->action_context;
+
+	if (oxr_session_action_context_has_attached_act_sets(sess_context)) {
 		return oxr_error(&log, XR_ERROR_ACTIONSETS_ALREADY_ATTACHED,
 		                 "(session) has already had action sets "
 		                 "attached, can only attach action sets once.");
@@ -200,7 +204,17 @@ oxr_xrAttachSessionActionSets(XrSession session, const XrSessionActionSetsAttach
 		return ret;
 	}
 
-	return oxr_session_attach_action_sets(&log, sess, bindInfo);
+	ret = oxr_session_attach_action_sets(  //
+	    &log,                              //
+	    &inst_context->suggested_profiles, //
+	    &sess->attached_actions,           //
+	    sess_context,                      //
+	    bindInfo);
+	if (ret != XR_SUCCESS) {
+		return ret;
+	}
+
+	return oxr_session_success_result(sess);
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL

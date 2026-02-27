@@ -1799,32 +1799,32 @@ oxr_action_bind_io(struct oxr_logger *log,
 
 XrResult
 oxr_session_attach_action_sets(struct oxr_logger *log,
-                               struct oxr_session *sess,
+                               const struct oxr_interaction_profile_array *suggested_profiles,
+                               struct oxr_session_attached_actions *attached_actions,
+                               struct oxr_session_action_context *sess_context,
                                const XrSessionActionSetsAttachInfo *bindInfo)
 {
-	struct oxr_instance *inst = sess->sys->inst;
-	XrResult ret = XR_SUCCESS;
+	XrResult ret;
 
-	const struct oxr_instance_action_context *inst_context = inst->action_context;
-	struct oxr_session_attached_actions *attached_actions = &sess->attached_actions;
-	struct oxr_session_action_context *sess_context = &sess->action_context;
+	size_t count = bindInfo->countActionSets;
 
-	oxr_interaction_profile_array_clone(&inst_context->suggested_profiles, &sess_context->profiles_on_attachment);
+	sess_context->action_set_attachment_count = count;
+	sess_context->act_set_attachments = U_TYPED_ARRAY_CALLOC(struct oxr_action_set_attachment, count);
+	if (sess_context->act_set_attachments == NULL) {
+		// Actual clean-up.
+		sess_context->action_set_attachment_count = 0;
+		return oxr_error(log, XR_ERROR_RUNTIME_FAILURE, "Failed to allocate action set attachments");
+	}
 
-	// Allocate room for list. No need to check if anything has been
-	// attached the API function does that.
-	sess->action_context.action_set_attachment_count = bindInfo->countActionSets;
-	sess->action_context.act_set_attachments =
-	    U_TYPED_ARRAY_CALLOC(struct oxr_action_set_attachment, sess->action_context.action_set_attachment_count);
-
-	// Set up the per-session data for these action sets.
-	for (uint32_t i = 0; i < sess->action_context.action_set_attachment_count; i++) {
+	for (size_t i = 0; i < count; i++) {
 		struct oxr_action_set *act_set =
 		    XRT_CAST_OXR_HANDLE_TO_PTR(struct oxr_action_set *, bindInfo->actionSets[i]);
+		assert(act_set != NULL);
+
 		struct oxr_action_set_ref *act_set_ref = act_set->data;
 		act_set_ref->ever_attached = true;
 
-		struct oxr_action_set_attachment *act_set_attached = &sess->action_context.act_set_attachments[i];
+		struct oxr_action_set_attachment *act_set_attached = &sess_context->act_set_attachments[i];
 		ret = oxr_action_set_attachment_init( //
 		    log,                              //
 		    act_set_attached,                 //
@@ -1871,13 +1871,15 @@ oxr_session_attach_action_sets(struct oxr_logger *log,
 		}
 	}
 
+	oxr_interaction_profile_array_clone(suggested_profiles, &sess_context->profiles_on_attachment);
+
 	/*
 	 * We used to send XrEventDataInteractionProfileChanged here, but that's
 	 * wrong. The OpenXR spec says we should only send them after a
 	 * successful call to xrSyncActionData.
 	 */
 
-	return oxr_session_success_result(sess);
+	return XR_SUCCESS;
 }
 
 static XrResult
