@@ -2426,6 +2426,19 @@ struct xrt_system_compositor_info
 
 	//! Whether submitting projection layers of a differing FOV from the target FOV is supported.
 	bool supports_fov_mutable;
+
+	/*!
+	 * The compositor supports emulating quad views with insets even if the
+	 * device is only a stereo device. The views are split into two stereo
+	 * projections layers by the state trackers and tagged with the correct
+	 * layer type tags.
+	 *
+	 * This only needs to be set if the compositor hasn't exposed a
+	 * view_configs with the XRT_VIEW_TYPE_QUAD type, as that will also
+	 * cause the state tracker to submit split quad views with stereo
+	 * devices.
+	 */
+	bool supports_emulated_quad_views_with_inset;
 };
 
 struct xrt_system_compositor;
