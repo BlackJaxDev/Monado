@@ -112,6 +112,7 @@ void
 chl_frame_state_gfx_set_target(struct chl_frame_state *frame_state,
                                struct render_gfx_target_resources *target_rtr,
                                const struct render_viewport_data target_viewport_datas[XRT_MAX_VIEWS],
+                               const render_scissor_data_t target_scissor_datas[XRT_MAX_VIEWS],
                                const struct xrt_matrix_2x2 vertex_rots[XRT_MAX_VIEWS])
 {
 	// Add the target info.
@@ -134,7 +135,8 @@ chl_frame_state_gfx_set_target(struct chl_frame_state *frame_state,
 		    sample_view,                 // squash_as_src_sample_view
 		    &layer_norm_rect,            // squash_as_src_norm_rect
 		    &vertex_rots[i],             // target_vertex_rot
-		    &target_viewport_datas[i]);  // target_viewport_data
+		    &target_viewport_datas[i],   // target_viewport_data
+		    &target_scissor_datas[i]);   // target_scissor_data
 	}
 }
 
@@ -219,6 +221,7 @@ chl_frame_state_cs_set_target(struct chl_frame_state *frame_state,
 		    &frame_state->data,         //
 		    sample_view,                // squash_as_src_sample_view
 		    &layer_norm_rect,           // squash_as_src_norm_rect
-		    &views[i]);                 // target_viewport_data
+		    &views[i],                  // target_viewport_data
+		    &views[i]);                 // target_scissor_data
 	}
 }

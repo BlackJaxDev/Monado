@@ -111,6 +111,7 @@ void
 chl_frame_state_gfx_set_target(struct chl_frame_state *frame_state,
                                struct render_gfx_target_resources *target_rtr,
                                const struct render_viewport_data target_viewport_datas[XRT_MAX_VIEWS],
+                               const render_scissor_data_t target_scissor_datas[XRT_MAX_VIEWS],
                                const struct xrt_matrix_2x2 vertex_rots[XRT_MAX_VIEWS]);
 
 /*!
@@ -140,6 +141,7 @@ chl_frame_state_gfx_default_pipeline(struct chl_frame_state *frame_state,
 	chl_frame_state_gfx_set_target( //
 	    frame_state,                //
 	    target_rtr,                 //
+	    target_viewport_datas,      //
 	    target_viewport_datas,      //
 	    vertex_rots);               //
 
