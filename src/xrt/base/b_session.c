@@ -82,6 +82,8 @@ destroy(struct xrt_session *xs)
 		b_system_remove_session(bs->bsys, &bs->base, &bs->sink);
 	}
 
+	os_mutex_destroy(&bs->events.mutex);
+
 	free(xs);
 }
 
