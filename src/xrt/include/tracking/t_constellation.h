@@ -20,6 +20,7 @@ typedef int8_t t_constellation_device_id_t;
 typedef int8_t t_constellation_led_id_it;
 
 #define XRT_CONSTELLATION_MAX_BLOBS_PER_FRAME 250
+#define XRT_CONSTELLATION_MAX_DEVICES 4
 
 #define XRT_CONSTELLATION_INVALID_DEVICE_ID -1
 #define XRT_CONSTELLATION_INVALID_LED_ID -1
