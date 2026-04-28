@@ -195,6 +195,112 @@ rift_estimate_system(struct xrt_builder *xb,
 	return XRT_SUCCESS;
 }
 
+void
+rift_open_pssense(struct rift_builder *rb,
+                  struct xrt_system_devices *xsysd,
+                  struct xrt_prober *xp,
+                  struct xrt_prober_device **xpdevs,
+                  size_t xpdev_count,
+                  struct t_builder_roles_helper *tbrh)
+{
+#ifdef XRT_BUILD_DRIVER_PSSENSE
+	struct xrt_prober_device *left_xpdev = u_builder_find_prober_device( //
+	    xpdevs,                                                          //
+	    xpdev_count,                                                     //
+	    PSSENSE_VID,                                                     //
+	    PSSENSE_PID_LEFT,                                                //
+	    XRT_BUS_TYPE_BLUETOOTH);
+
+	if (left_xpdev != NULL) {
+		struct xrt_device *left_xdev = pssense_create(xp, left_xpdev);
+		if (left_xdev == NULL) {
+			RIFT_ERROR(rb, "PS Sense left controller device creation failed.");
+		} else {
+			xsysd->static_xdevs[xsysd->static_xdev_count++] = left_xdev;
+			tbrh->left = left_xdev;
+		}
+	}
+
+	struct xrt_prober_device *right_xpdev = u_builder_find_prober_device( //
+	    xpdevs,                                                           //
+	    xpdev_count,                                                      //
+	    PSSENSE_VID,                                                      //
+	    PSSENSE_PID_RIGHT,                                                //
+	    XRT_BUS_TYPE_BLUETOOTH);
+
+	if (right_xpdev != NULL) {
+		struct xrt_device *right_xdev = pssense_create(xp, right_xpdev);
+		if (right_xdev == NULL) {
+			RIFT_ERROR(rb, "PS Sense right controller device creation failed.");
+		} else {
+			xsysd->static_xdevs[xsysd->static_xdev_count++] = right_xdev;
+			tbrh->right = right_xdev;
+		}
+	}
+#endif
+}
+
+void
+rift_open_contactglove(struct rift_builder *rb,
+                       struct xrt_system_devices *xsysd,
+                       struct xrt_prober *xp,
+                       struct xrt_prober_device **xpdevs,
+                       size_t xpdev_count,
+                       struct t_builder_roles_helper *tbrh)
+{
+#ifdef XRT_BUILD_DRIVER_CONTACTGLOVE
+	xrt_result_t ret;
+
+	struct xrt_prober_device *dongle_xpdev = u_builder_find_prober_device( //
+	    xpdevs,                                                            //
+	    xpdev_count,                                                       //
+	    CONTACTGLOVE2_VID,                                                 //
+	    CONTACTGLOVE2_PID,                                                 //
+	    XRT_BUS_TYPE_USB);
+
+	if (dongle_xpdev == NULL) {
+		return;
+	}
+
+	unsigned char serial_number[64] = {0};
+	ret = xrt_prober_get_string_descriptor(xp, dongle_xpdev, XRT_PROBER_STRING_SERIAL_NUMBER, serial_number,
+	                                       sizeof(serial_number));
+	if (ret < 0) {
+		RIFT_WARN(rb, "Failed to get ContactGlove dongle serial number with code %d. Setting default.", ret);
+		snprintf((char *)serial_number, sizeof(serial_number), "contactglove_serial");
+	}
+
+	struct os_serial_device *contactglove_dongle_serial;
+	ret = xrt_prober_open_serial_device(xp, dongle_xpdev, &CONTACTGLOVE2_SERIAL_PARAMETERS,
+	                                    &contactglove_dongle_serial);
+	if (ret == 0) {
+		struct contactglove_dongle *dongle;
+
+		ret = contactglove_create(CONTACTGLOVE_TYPE_CONTACTGLOVE2, (char *)serial_number,
+		                          contactglove_dongle_serial, &dongle,
+		                          xsysd->static_xdevs + xsysd->static_xdev_count);
+
+		if (ret > 0) {
+			xsysd->static_xdev_count += ret;
+
+			// Fill in the devices into the static xdev array.
+			tbrh->left = xsysd->static_xdevs[xsysd->static_xdev_count - 2];
+			tbrh->right = xsysd->static_xdevs[xsysd->static_xdev_count - 1];
+
+			// Set the hand tracking roles to the gloves
+			tbrh->hand_tracking.unobstructed.left = tbrh->left;
+			tbrh->hand_tracking.unobstructed.right = tbrh->right;
+			RIFT_DEBUG(rb, "Created ContactGlove devices for serial number %s", serial_number);
+		} else {
+			RIFT_ERROR(rb, "Failed to create ContactGlove devices with code %d.", ret);
+			os_serial_destroy(contactglove_dongle_serial);
+		}
+	} else {
+		RIFT_ERROR(rb, "Failed to open ContactGlove dongle serial device with code %d.", ret);
+	}
+#endif
+}
+
 static xrt_result_t
 rift_open_system_impl(struct xrt_builder *xb,
                       cJSON *config,
@@ -296,71 +402,8 @@ rift_open_system_impl(struct xrt_builder *xb,
 		}
 	}
 
-#ifdef XRT_BUILD_DRIVER_PSSENSE
-	struct xrt_device *left_xdev = NULL;
-	struct xrt_prober_device *left_xpdev =
-	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_LEFT, XRT_BUS_TYPE_BLUETOOTH);
-	if (left_xpdev != NULL) {
-		left_xdev = pssense_create(xp, left_xpdev);
-		if (left_xdev == NULL) {
-			RIFT_ERROR(rb, "PS Sense left controller device creation failed");
-		} else {
-			xsysd->static_xdevs[xsysd->static_xdev_count++] = left_xdev;
-		}
-	}
-
-	struct xrt_device *right_xdev = NULL;
-	struct xrt_prober_device *right_xpdev =
-	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_RIGHT, XRT_BUS_TYPE_BLUETOOTH);
-	if (right_xpdev != NULL) {
-		right_xdev = pssense_create(xp, right_xpdev);
-		if (right_xdev == NULL) {
-			RIFT_ERROR(rb, "PS Sense right controller device creation failed");
-		} else {
-			xsysd->static_xdevs[xsysd->static_xdev_count++] = right_xdev;
-		}
-	}
-
-	tbrh->left = left_xdev;
-	tbrh->right = right_xdev;
-#endif
-
-#ifdef XRT_BUILD_DRIVER_CONTACTGLOVE
-	struct xrt_prober_device *dongle_xpdev =
-	    u_builder_find_prober_device(xpdevs, xpdev_count, CONTACTGLOVE2_VID, CONTACTGLOVE2_PID, XRT_BUS_TYPE_USB);
-
-	unsigned char serial_number[64] = {0};
-	ret = xrt_prober_get_string_descriptor(xp, dongle_xpdev, XRT_PROBER_STRING_SERIAL_NUMBER, serial_number,
-	                                       sizeof(serial_number));
-	if (ret < 0) {
-		RIFT_WARN(rb, "Failed to get ContactGlove dongle serial number with code %d", ret);
-	}
-
-	struct os_serial_device *contactglove_dongle_serial;
-	ret = xrt_prober_open_serial_device(xp, dongle_xpdev, &CONTACTGLOVE2_SERIAL_PARAMETERS,
-	                                    &contactglove_dongle_serial);
-	if (ret == 0) {
-		struct contactglove_dongle *dongle;
-
-		ret = contactglove_create(CONTACTGLOVE_TYPE_CONTACTGLOVE2, (char *)serial_number,
-		                          contactglove_dongle_serial, &dongle,
-		                          xsysd->static_xdevs + xsysd->static_xdev_count);
-
-		if (ret > 0) {
-			xsysd->static_xdev_count += ret;
-			tbrh->left = xsysd->static_xdevs[xsysd->static_xdev_count - 2];
-			tbrh->right = xsysd->static_xdevs[xsysd->static_xdev_count - 1];
-			tbrh->hand_tracking.unobstructed.left = tbrh->left;
-			tbrh->hand_tracking.unobstructed.right = tbrh->right;
-			RIFT_DEBUG(rb, "Created ContactGlove devices for serial number %s", serial_number);
-		} else {
-			RIFT_WARN(rb, "Failed to create ContactGlove devices with code %d", ret);
-			os_serial_destroy(contactglove_dongle_serial);
-		}
-	} else {
-		RIFT_WARN(rb, "Failed to open ContactGlove dongle serial device with code %d", ret);
-	}
-#endif
+	rift_open_pssense(rb, xsysd, xp, xpdevs, xpdev_count, tbrh);
+	rift_open_contactglove(rb, xsysd, xp, xpdevs, xpdev_count, tbrh);
 
 	xret = xrt_prober_unlock_list(xp, &xpdevs);
 	if (xret != XRT_SUCCESS) {
