@@ -76,6 +76,10 @@ namespace xrt::tracking::constellation {
 
 namespace os = xrt::auxiliary::os;
 
+// Forward-declares
+struct CameraMosaic;
+struct Device;
+
 struct CameraSample
 {
 	bool has_sample;
@@ -99,18 +103,15 @@ struct CameraSample
 	Push(t_blob_observation &blobservation);
 };
 
-class CameraMosaic;
-
-class Camera
+struct Camera
 {
-public:
 	struct t_blob_sink base = {
 	    .push_blobs = constellation_tracker_camera_push_blobs,
 	    .destroy = constellation_tracker_camera_destroy,
 	};
 
 	//! The owner tracker, so we can retrieve it from the blob sink callback
-	class ConstellationTracker *tracker;
+	struct ConstellationTracker *tracker;
 	std::weak_ptr<CameraMosaic> mosaic;
 
 	struct t_camera_calibration calibration;
@@ -159,23 +160,66 @@ public:
 	       enum u_logging_level *log_level_ptr);
 
 	~Camera();
+
+	// Delete all copy/move ctors, since the pointers for `base` need to be stable
+	Camera(const Camera &) = delete;
+	Camera(Camera &&) = delete;
+	Camera &
+	operator=(const Camera &) = delete;
+	Camera &
+	operator=(Camera &&) = delete;
+
+	std::optional<struct xrt_pose>
+	GetWorldPose(timepoint_ns when_ns);
+
+	void
+	DeferSampleToSlowThread(CameraSample &sample);
+
+	//! Fast matching based on prior pose
+	bool
+	TryDevicePose(std::unique_ptr<Device> &device,
+	              CameraSample &sample,
+	              struct xrt_pose &Tcv_cam_world,
+	              struct xrt_pose &Tcv_world_device_prior,
+	              struct xrt_pose &Tcv_world_device_candidate);
+
+	bool
+	TryDeviceBlobRecovery(std::unique_ptr<Device> &device,
+	                      CameraSample &sample,
+	                      struct xrt_pose &Tcv_cam_world,
+	                      struct xrt_pose &Tcv_world_device_prior);
+
+	void
+	SlowSampleProcess(CameraSample &sample);
+
+	//! Returns whether a slow search is needed
+	bool
+	FastSampleProcess(CameraSample &sample);
+
+	void
+	PushPose(std::unique_ptr<Device> &device,
+	         struct pose_metrics &score,
+	         struct xrt_pose &Tcv_cam_device,
+	         t_blob_observation &tbo,
+	         bool optimize);
 };
 
-class CameraMosaic
+struct CameraMosaic
 {
-public:
 	std::vector<std::unique_ptr<Camera>> cameras;
 
 	struct t_constellation_tracker_tracking_source *tracking_origin;
 
 	CameraMosaic(ConstellationTracker *tracker, const struct t_constellation_tracker_camera_mosaic &mosaic_params);
 
-	~CameraMosaic();
+	~CameraMosaic() = default;
+
+	std::optional<struct xrt_pose>
+	GetTrackingOriginPose(timepoint_ns when_ns);
 };
 
-class Device
+struct Device
 {
-public:
 	struct t_constellation_tracker_device_params params;
 	struct t_constellation_tracker_device *device;
 
@@ -203,9 +247,8 @@ public:
 	~Device();
 };
 
-class ConstellationTracker
+struct ConstellationTracker
 {
-public:
 	struct xrt_frame_node node = {
 	    .next = nullptr,
 	    .break_apart = constellation_tracker_node_break_apart,
@@ -235,11 +278,25 @@ public:
 
 	~ConstellationTracker();
 
+	// Delete all copy/move ctors, since the pointers for `node` need to be stable
+	ConstellationTracker(const ConstellationTracker &) = delete;
+	ConstellationTracker(ConstellationTracker &&) = delete;
+	ConstellationTracker &
+	operator=(const ConstellationTracker &) = delete;
+	ConstellationTracker &
+	operator=(ConstellationTracker &&) = delete;
+
 	t_constellation_device_id_t
 	AddDevice(struct t_constellation_tracker_device_params *params, struct t_constellation_tracker_device *device);
 
 	void
 	RemoveDevice(t_constellation_device_id_t device_id);
+
+	void
+	MarkMatchingBlobs(struct t_blob_observation &bwobs,
+	                  struct t_constellation_tracker_led_model &led_model,
+	                  t_constellation_device_id_t device_id,
+	                  struct pose_metrics_blob_match_info &blob_match_info);
 };
 
 }; // namespace xrt::tracking::constellation
