@@ -43,6 +43,8 @@ add_library(
 	actions/oxr_subaction.h
 	common/oxr_defines.h
 	common/oxr_forward_declarations.h
+	common/oxr_handle_array.c
+	common/oxr_handle_array.h
 	common/oxr_handle_base.c
 	common/oxr_handle_base.h
 	common/oxr_refcounted.h

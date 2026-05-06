@@ -1,11 +1,13 @@
 // Copyright 2018-2024, Collabora, Ltd.
 // Copyright 2023-2026, NVIDIA CORPORATION.
+// Copyright 2026, Beyley Cardellio
 // SPDX-License-Identifier: BSL-1.0
 /*!
  * @file
  * @brief  Holds input related functions.
  * @author Jakob Bornecrantz <jakob@collabora.com>
  * @author Korcan Hussein <korcan.hussein@collabora.com>
+ * @author Beyley Cardellio <ep1cm1n10n123@gmail.com>
  * @ingroup oxr_main
  */
 
@@ -1799,18 +1801,6 @@ oxr_action_bind_io(struct oxr_logger *log,
  *
  */
 
-static inline size_t
-oxr_handle_base_get_num_children(struct oxr_handle_base *hb)
-{
-	size_t ret = 0;
-	for (uint32_t i = 0; i < XRT_MAX_HANDLE_CHILDREN; ++i) {
-		if (hb->children[i] != NULL) {
-			++ret;
-		}
-	}
-	return ret;
-}
-
 XrResult
 oxr_session_attach_action_sets(struct oxr_logger *log,
                                struct oxr_session *sess,
@@ -1851,7 +1841,7 @@ oxr_session_attach_action_sets(struct oxr_logger *log,
 		}
 
 		// Allocate the action attachments for this set.
-		act_set_attached->action_attachment_count = oxr_handle_base_get_num_children(&act_set->handle);
+		act_set_attached->action_attachment_count = act_set->handle.children.count;
 		act_set_attached->act_attachments =
 		    U_TYPED_ARRAY_CALLOC(struct oxr_action_attachment, act_set_attached->action_attachment_count);
 		if (act_set_attached->act_attachments == NULL) {
@@ -1862,8 +1852,8 @@ oxr_session_attach_action_sets(struct oxr_logger *log,
 
 		// Set up the per-session data for the actions.
 		uint32_t child_index = 0;
-		for (uint32_t k = 0; k < XRT_MAX_HANDLE_CHILDREN; k++) {
-			struct oxr_action *act = (struct oxr_action *)act_set->handle.children[k];
+		for (uint32_t k = 0; k < act_set->handle.children.count; k++) {
+			struct oxr_action *act = (struct oxr_action *)act_set->handle.children.handles[k];
 			if (act == NULL) {
 				continue;
 			}

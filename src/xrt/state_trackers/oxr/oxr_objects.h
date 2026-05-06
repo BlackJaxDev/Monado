@@ -1176,6 +1176,8 @@ struct oxr_extension_status
 };
 #undef MAKE_EXT_STATUS
 
+#define XRT_MAX_DEBUG_MESSENGERS 256
+
 /*!
  * Main object that ties everything together.
  *
@@ -1298,7 +1300,7 @@ struct oxr_instance
 	} quirks;
 
 	//! Debug messengers
-	struct oxr_debug_messenger *messengers[XRT_MAX_HANDLE_CHILDREN];
+	struct oxr_debug_messenger *messengers[XRT_MAX_DEBUG_MESSENGERS];
 
 	bool lifecycle_verbose;
 	bool debug_views;

@@ -14,14 +14,14 @@
 
 #include "../oxr_logger.h"
 
+#include "oxr_handle_array.h"
+
 #include <stdlib.h>
 
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define XRT_MAX_HANDLE_CHILDREN 256
 
 // Forward declare
 struct oxr_handle_base;
@@ -70,7 +70,7 @@ struct oxr_handle_base
 	/*!
 	 * Array of children, if any.
 	 */
-	struct oxr_handle_base *children[XRT_MAX_HANDLE_CHILDREN];
+	struct oxr_handle_array children;
 
 	/*!
 	 * Current handle state.
@@ -101,6 +101,18 @@ oxr_handle_init(struct oxr_logger *log,
                 uint64_t debug,
                 oxr_handle_destroyer destroy,
                 struct oxr_handle_base *parent);
+
+/*!
+ * Recursively destroys a handle and all of its children, removing it from its parent if it has one.
+ *
+ * oxr_handle_destroy wraps this to provide some extra output and start `level`
+ * at 0. `level`, which is reported in debug output, is the current depth of
+ * recursion.
+ *
+ * @protected @memberof oxr_handle_base
+ */
+XrResult
+oxr_handle_destroy_internal(struct oxr_logger *log, struct oxr_handle_base *hb, int level);
 
 /*!
  * Allocate some memory for use as a handle, and initialize it as a handle.
