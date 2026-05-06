@@ -187,7 +187,7 @@ rift_sensor_thread_tick(struct rift_hmd *hmd)
 				        },
 				};
 
-				rift_timing_source_push_event(hmd->timing_source, &event);
+				b_timing_source_push_event(hmd->timing_source, &event);
 			}
 		}
 
@@ -709,7 +709,7 @@ rift_devices_create(struct os_hid_device *hmd_dev,
 	m_ff_f64_alloc(&hmd->gravity_correction, 4096);
 
 	if (xfctx) {
-		result = rift_timing_source_init(xfctx, &hmd->timing_source);
+		result = b_timing_source_init(xfctx, &hmd->timing_source);
 		if (result < 0) {
 			HMD_ERROR(hmd, "Failed to initialize timing source, reason %d", result);
 		}

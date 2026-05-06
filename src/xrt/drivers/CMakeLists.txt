@@ -306,8 +306,6 @@ if(XRT_BUILD_DRIVER_RIFT)
 		rift/rift_driver.c
 		rift/rift_distortion.c
 		rift/rift_prober.c
-		rift/rift_timing_source.c
-		rift/rift_timing_source.h
 		rift/rift_usb.c
 		rift/rift_usb.h
 		rift/rift_radio.c
@@ -323,6 +321,7 @@ if(XRT_BUILD_DRIVER_RIFT)
 			aux_util
 			aux_util_sink
 			aux_math
+			base
 			constellation
 			xrt-external-cjson
 			xrt-external-tinyceres

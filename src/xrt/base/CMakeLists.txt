@@ -6,7 +6,7 @@ target_include_directories(base PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(
 	base
-	PRIVATE aux_util
+	PRIVATE aux_util aux_os
 	PUBLIC xrt-interfaces
 	)
 
@@ -22,4 +22,6 @@ target_sources(
 		b_system.h
 		b_system_devices.c
 		b_system_devices.h
+		b_timing_source.c
+		b_timing_source.h
 	)
