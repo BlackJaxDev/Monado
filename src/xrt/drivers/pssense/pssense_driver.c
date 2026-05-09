@@ -724,7 +724,7 @@ pssense_run_thread(void *ptr)
 
 	timepoint_ns next_output_ns = os_monotonic_get_ns();
 
-	int result;
+	int result = 0;
 	while (os_thread_helper_is_running_locked(&pssense->controller_thread) && result >= 0) {
 		os_thread_helper_unlock(&pssense->controller_thread);
 
