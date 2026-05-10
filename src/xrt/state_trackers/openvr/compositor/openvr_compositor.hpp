@@ -1,0 +1,218 @@
+// Copyright 2026, Beyley Cardellio
+// SPDX-License-Identifier: BSL-1.0
+/*!
+ * @file
+ * @brief Implementation of compositor-related functionality for OpenVR.
+ *
+ * @author Beyley Cardellio <ep1cm1n10n123@gmail.com>
+ * @ingroup openvr
+ */
+
+#pragma once
+
+#include "xrt/xrt_compositor.h"
+#include "xrt/xrt_config_build.h"
+#include "xrt/xrt_device.h"
+#include "xrt/xrt_system.h"
+#include "xrt/xrt_gfx_vk.h"
+
+#include "util/u_time.h"
+
+#include "common/openvr_logger.hpp"
+
+#include "openvr_interfaces_unified.h"
+
+#include "openvr_events.hpp"
+
+#include <array>
+#include <optional>
+#include <memory>
+
+
+namespace xrt::state_trackers::openvr {
+
+struct EyeTexture
+{
+	//! The swapchain in use
+	xrt_swapchain *xsc{nullptr};
+	//! The index into the eye's swapchain for the currently held texture.
+	uint32_t swapchain_index;
+
+	//! The format of the currently held texture.
+	uint32_t format;
+	//! The width of the currently held texture.
+	uint32_t width;
+	//! The height of the currently held texture.
+	uint32_t height;
+	//! The sample count of the currently held texture.
+	uint32_t sample_count;
+
+	//! The bounds of the submitted texture.
+	xrt_rect bounds;
+
+	~EyeTexture()
+	{
+		if (this->xsc != nullptr) {
+			xrt_swapchain_release_image(this->xsc, this->swapchain_index);
+		}
+
+		xrt_swapchain_reference(&this->xsc, nullptr);
+	}
+};
+
+struct EyeState
+{
+	EyeTexture texture;
+};
+
+struct FrameState
+{
+	int64_t frame_id{-1};
+	timepoint_ns predicted_display_time{0};
+	time_duration_ns predicted_display_period{0};
+};
+
+/*!
+ * Since eye textures are created by the clients, and not the runtime, we have to do a copy into a runtime-owned
+ * swapchain, this structure cached created swapchains to avoid creating a new one every frame.
+ */
+struct SwapchainCache
+{
+public: // Fields
+	xrt_swapchain *xsc{nullptr};
+
+	uint32_t width{0};
+	uint32_t height{0};
+	uint32_t format{0};
+	uint32_t sample_count{0};
+
+public: // Methods
+	//! Ensures that there is a swapchain in the cache with the given properties, creating one if necessary.
+	xrt_result_t
+	EnsureSwapchain(xrt_compositor *xc, uint32_t format, uint32_t width, uint32_t height, uint32_t sample_count);
+
+	~SwapchainCache();
+};
+
+struct RenderStateCache
+{
+	std::array<xrt_fov, 2> fovs;
+	std::array<xrt_pose, 2> T_head_eyes;
+
+	xrt_pose head_relation;
+};
+
+struct Compositor
+{
+private: // Fields
+	//! The state for the current active frame
+	std::optional<FrameState> active_frame{std::nullopt};
+	//! The state for each submit eye.
+	std::array<std::optional<EyeState>, 2> frame_eye_states{std::nullopt, std::nullopt};
+	//! Caches of swapchains for each eye, keyed by the format/size/sample count of the submitted texture.
+	std::array<SwapchainCache, 2> swapchain_caches{};
+
+	//! The active system devices
+	xrt_system_devices *xsysd{nullptr};
+
+	//! The current native compositor
+	xrt_compositor_native *xcn{nullptr};
+
+	xrt_system_compositor *xsysc{nullptr};
+
+	//! The currently active compositor, implicitly also has an active session.
+	xrt_compositor *active_compositor{nullptr};
+
+#ifdef XRT_HAVE_VULKAN
+	struct xrt_compositor_vk *xc_vk{nullptr};
+#endif
+
+	std::optional<RenderStateCache> render_state_cache{std::nullopt};
+
+	std::shared_ptr<Events> events{};
+
+public: // Fields
+	std::optional<timepoint_ns> last_predicted_display_time{std::nullopt};
+	std::optional<time_duration_ns> last_predicted_display_period{std::nullopt};
+
+	std::array<vr::TrackedDevicePose_t, vr::k_unMaxTrackedDeviceCount> last_render_poses{};
+	std::array<vr::TrackedDevicePose_t, vr::k_unMaxTrackedDeviceCount> last_game_poses{};
+
+	vr::ETrackingUniverseOrigin current_tracking_universe{vr::ETrackingUniverseOrigin::TrackingUniverseSeated};
+
+private: // Methods
+#ifdef XRT_HAVE_VULKAN
+	 //! Sets up the Vulkan compositor as the active compositor, and begins the session.
+	xrt_result_t
+	SetupVulkanCompositor(openvr_logger &logger, vr::VRVulkanTextureData_t &vulkan_data);
+
+	xrt_result_t
+	BlitAppImageToSwapchainImage(openvr_logger &logger,
+	                             xrt_swapchain *xsc,
+	                             uint32_t dst_index,
+	                             vr::VRVulkanTextureData_t &texture_data,
+	                             vr::EColorSpace color_space,
+	                             const xrt_rect &rect);
+
+	//! Handles submission of a Vulkan texture, which involves copying it into a runtime-owned swapchain image.
+	vr::EVRCompositorError
+	SubmitVulkan(openvr_logger &logger,
+	             vr::EVREye eye,
+	             vr::VRVulkanTextureData_t &texture_data,
+	             vr::EColorSpace color_space,
+	             const vr::VRTextureBounds_t &bounds);
+
+	void
+	GetVulkanOutputDevice(openvr_logger &logger, uint64_t *out_device, VkInstance pInstance);
+#endif
+
+	//! Gets the projection layer data from the passed eye state
+	xrt_layer_projection_view_data
+	GetProjectionLayerDataForEye(vr::EVREye eye, const EyeState &eye_state);
+
+	//! Completes a frame and submits textures to the runtime.
+	vr::EVRCompositorError
+	CompleteFrame(openvr_logger &logger);
+
+public: // Methods
+	Compositor(xrt_system_devices *xsysd,
+	           xrt_compositor_native *xcn,
+	           xrt_system_compositor *xsysc,
+	           std::shared_ptr<Events> &events);
+
+	~Compositor();
+
+	/*!
+	 * Waits for the next frame and begins it, cancelling/releasing any previously active frame and it's resources,
+	 * if it exists.
+	 */
+	vr::EVRCompositorError
+	WaitBeginFrame(openvr_logger &logger);
+
+	//! Submits a texture for an eye, completing the frame if both eyes have been submit.
+	vr::EVRCompositorError
+	Submit(openvr_logger &logger,
+	       vr::EVREye eye,
+	       const vr::Texture_t &texture,
+	       const vr::VRTextureBounds_t &bounds,
+	       vr::EVRSubmitFlags nSubmitFlags);
+
+	void
+	GetOutputDevice(openvr_logger &logger,
+	                uint64_t *out_device,
+	                vr::ETextureType texture_type,
+	                VkInstance pInstance);
+
+	timepoint_ns
+	GetTimeForPredictions();
+
+	time_duration_ns
+	GetFramePeriod();
+
+	xrt_result_t
+	GetFrameRenderState(std::array<xrt_fov, 2> &fovs,
+	                    std::array<xrt_pose, 2> &T_head_eyes,
+	                    xrt_pose &head_relation);
+};
+
+}; // namespace xrt::state_trackers::openvr
