@@ -66,6 +66,53 @@ CameraSample::CameraSample(t_blob_observation &blobservation, Camera *camera)
 	this->device_count = 0;
 }
 
+void
+CameraSample::MarkMatchingBlobs(ConstellationTracker *ct,
+                                t_constellation_tracker_led_model &led_model,
+                                t_constellation_device_id_t device_id,
+                                pose_metrics_blob_match_info &blob_match_info)
+{
+	// First clear existing blob labels for this device
+	for (uint32_t i = 0; i < this->blob_count; i++) {
+		t_blob &b = this->blobs[i];
+		t_constellation_device_id_t led_object_id = b.matched_device_id;
+
+		// Skip blobs which already have an ID not belonging to this device
+		if (led_object_id != device_id) {
+			continue;
+		}
+
+		if (b.matched_device_led_id != XRT_CONSTELLATION_INVALID_LED_ID) {
+			// @todo is this needed?
+			// b.prev_led_id = b.led_id;
+		}
+
+		b.matched_device_led_id = XRT_CONSTELLATION_INVALID_LED_ID;
+		b.matched_device_id = XRT_CONSTELLATION_INVALID_DEVICE_ID;
+	}
+
+	// Iterate the visible LEDs and mark matching blobs with this device ID and LED ID
+	for (int i = 0; i < blob_match_info.num_visible_leds; i++) {
+		pose_metrics_visible_led_info &led_info = blob_match_info.visible_leds[i];
+		t_constellation_tracker_led *led = led_info.led;
+
+		if (led_info.matched_blob != NULL) {
+			t_blob *b = led_info.matched_blob;
+
+			b->matched_device_led_id = led->id;
+			b->matched_device_id = device_id;
+
+			CT_DEBUG(ct, "Marking LED %d/%d at %f,%f angle %f now %d (was %d)", device_id, led->id,
+			         b->center.x, b->center.y, RAD_TO_DEG(acosf(led_info.facing_dot)),
+			         b->matched_device_led_id, /* b->prev_led_id */ -1);
+		} else {
+			CT_DEBUG(ct, "No blob for device %d LED %d @ %f,%f size %f px angle %f", device_id, led->id,
+			         led_info.pos_px.x, led_info.pos_px.y, 2 * led_info.led_radius_px,
+			         RAD_TO_DEG(acosf(led_info.facing_dot)));
+		}
+	}
+}
+
 /*
  *
  * Camera implementations
@@ -320,8 +367,6 @@ Camera::SlowSampleProcess(CameraSample &sample)
 		}
 
 		pose_metrics score;
-		pose_metrics_blob_match_info blob_match_info;
-
 		bool found_pose = correspondence_search_find_one_pose( //
 		    data.cs,                                           //
 		    search_model,                                      //
@@ -333,14 +378,6 @@ Camera::SlowSampleProcess(CameraSample &sample)
 		    device->gravity_error_rad,                         //
 		    &score);                                           //
 		if (found_pose) {
-			pose_metrics_match_pose_to_blobs(&Tcv_cam_device, sample.blobs, sample.blob_count,
-			                                 &device->params.led_model, device->id, &this->model,
-			                                 &blob_match_info);
-			tracker->MarkMatchingBlobs(sample, device->params.led_model, device->id, blob_match_info);
-
-			auto tbo = sample.ToBlobObservation();
-			t_blobwatch_mark_blob_device(sample.source, &tbo, device->id);
-
 			this->PushPose(sample, device, score, Tcv_cam_device, true);
 
 			// We found a pose for this device in this sample
@@ -463,6 +500,17 @@ Camera::PushPose(CameraSample &camera_sample,
                  bool optimize)
 {
 	ConstellationTracker *tracker = this->tracker;
+
+	{ // Match visible blobs to the pose we found
+		pose_metrics_blob_match_info blob_match_info;
+		pose_metrics_match_pose_to_blobs(&Tcv_cam_device, camera_sample.blobs, camera_sample.blob_count,
+		                                 &device->params.led_model, device->id, &this->model, &blob_match_info);
+
+		camera_sample.MarkMatchingBlobs(tracker, device->params.led_model, device->id, blob_match_info);
+
+		auto tbo = camera_sample.ToBlobObservation();
+		t_blobwatch_mark_blob_device(camera_sample.source, &tbo, device->id);
+	}
 
 	// Try to optimize the pose
 	if (optimize) {
@@ -723,53 +771,6 @@ ConstellationTracker::RemoveDevice(t_constellation_device_id_t device_id)
 
 	// Remove the device
 	this->devices.erase(this->devices.begin() + index);
-}
-
-void
-ConstellationTracker::MarkMatchingBlobs(CameraSample &sample,
-                                        t_constellation_tracker_led_model &led_model,
-                                        t_constellation_device_id_t device_id,
-                                        pose_metrics_blob_match_info &blob_match_info)
-{
-	// First clear existing blob labels for this device
-	for (uint32_t i = 0; i < sample.blob_count; i++) {
-		t_blob &b = sample.blobs[i];
-		t_constellation_device_id_t led_object_id = b.matched_device_id;
-
-		// Skip blobs which already have an ID not belonging to this device
-		if (led_object_id != device_id) {
-			continue;
-		}
-
-		if (b.matched_device_led_id != XRT_CONSTELLATION_INVALID_LED_ID) {
-			// @todo is this needed?
-			// b.prev_led_id = b.led_id;
-		}
-
-		b.matched_device_led_id = XRT_CONSTELLATION_INVALID_LED_ID;
-		b.matched_device_id = XRT_CONSTELLATION_INVALID_DEVICE_ID;
-	}
-
-	// Iterate the visible LEDs and mark matching blobs with this device ID and LED ID
-	for (int i = 0; i < blob_match_info.num_visible_leds; i++) {
-		pose_metrics_visible_led_info &led_info = blob_match_info.visible_leds[i];
-		t_constellation_tracker_led *led = led_info.led;
-
-		if (led_info.matched_blob != NULL) {
-			t_blob *b = led_info.matched_blob;
-
-			b->matched_device_led_id = led->id;
-			b->matched_device_id = device_id;
-
-			CT_DEBUG(this, "Marking LED %d/%d at %f,%f angle %f now %d (was %d)", device_id, led->id,
-			         b->center.x, b->center.y, RAD_TO_DEG(acosf(led_info.facing_dot)),
-			         b->matched_device_led_id, /* b->prev_led_id */ -1);
-		} else {
-			CT_DEBUG(this, "No blob for device %d LED %d @ %f,%f size %f px angle %f", device_id, led->id,
-			         led_info.pos_px.x, led_info.pos_px.y, 2 * led_info.led_radius_px,
-			         RAD_TO_DEG(acosf(led_info.facing_dot)));
-		}
-	}
 }
 
 }; // namespace xrt::tracking::constellation

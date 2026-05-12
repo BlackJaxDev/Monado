@@ -120,6 +120,12 @@ public: // Methods
 
 	CameraSample(t_blob_observation &blobservation, Camera *camera);
 
+	void
+	MarkMatchingBlobs(ConstellationTracker *ct,
+	                  t_constellation_tracker_led_model &led_model,
+	                  t_constellation_device_id_t device_id,
+	                  pose_metrics_blob_match_info &blob_match_info);
+
 	t_blob_observation
 	ToBlobObservation() const &
 	{
@@ -377,12 +383,6 @@ public: // Methods
 
 	void
 	RemoveDevice(t_constellation_device_id_t device_id);
-
-	void
-	MarkMatchingBlobs(CameraSample &sample,
-	                  t_constellation_tracker_led_model &led_model,
-	                  t_constellation_device_id_t device_id,
-	                  pose_metrics_blob_match_info &blob_match_info);
 };
 
 }; // namespace xrt::tracking::constellation
