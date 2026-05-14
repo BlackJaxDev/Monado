@@ -16,6 +16,8 @@ add_library(
 	pose_optimize.h
 	t_constellation_tracker.cpp
 	t_constellation_tracker.h
+	t_constellation_tracker_dataset.cpp
+	t_constellation_tracker_dataset.hpp
 	t_constellation_tracker_internal.hpp
 	t_led_sync_refinement.c
 	t_led_sync_refinement.h

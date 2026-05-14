@@ -8,6 +8,7 @@
  */
 
 #include "t_constellation_tracker_internal.hpp"
+#include "t_constellation_tracker_dataset.hpp"
 
 #include <string>
 
@@ -15,6 +16,7 @@
 namespace xrt::tracking::constellation {
 
 DEBUG_GET_ONCE_LOG_OPTION(constellation_tracker_log, "CONSTELLATION_TRACKER_LOG", U_LOGGING_WARN)
+DEBUG_GET_ONCE_OPTION(constellation_tracker_data_recorder_output, "CONSTELLATION_TRACKER_DATA_RECORDER_OUTPUT", "")
 
 /*
  *
@@ -64,6 +66,12 @@ CameraSample::CameraSample(t_blob_observation &blobservation, Camera *camera)
 
 	this->device_states = {};
 	this->device_count = 0;
+
+	auto mosaic = camera->mosaic.lock();
+	U_ASSERT_WEAK_PTR_THROW(mosaic, "Camera's mosaic was destroyed while we still had a sample referencing it");
+
+	this->mosaic_index = mosaic->index;
+	this->camera_index = camera->index;
 }
 
 void
@@ -513,6 +521,12 @@ Camera::FastSampleProcess(CameraSample &sample)
 
 	this->DebugScribbleSample(sample, true);
 
+	// Only save samples on the fast processing thread, since the slow processing thread is *triggered* by the fast
+	// processing thread.
+	if (tracker->data_recorder) {
+		tracker->data_recorder->RecordSample(sample);
+	}
+
 	return need_full_search;
 }
 
@@ -741,6 +755,13 @@ ConstellationTracker::ConstellationTracker(t_constellation_tracker_params *param
 
 	this->params = *params;
 
+	std::string data_recorder_output = debug_get_option_constellation_tracker_data_recorder_output();
+	if (!data_recorder_output.empty()) {
+		this->data_recorder = std::make_unique<DataRecorder>(this, data_recorder_output);
+		CT_INFO(this, "Constellation tracker data recorder enabled, outputting to %s",
+		        data_recorder_output.c_str());
+	}
+
 	CT_DEBUG(this, "Created constellation tracker with %zu mosaics", this->mosaics.size());
 }
 
@@ -793,6 +814,10 @@ ConstellationTracker::AddDevice(t_constellation_tracker_device_params *params, t
 	this->devices.push_back(std::make_unique<Device>(params, device, id));
 
 	CT_DEBUG(this, "Added device with ID %d to constellation tracker", id);
+
+	if (this->data_recorder) {
+		this->data_recorder->RecordDeviceInfo(*this->devices.back());
+	}
 
 	return id;
 }

@@ -32,6 +32,7 @@
 #include <optional>
 #include <stdexcept>
 #include <array>
+#include <fstream>
 
 #include "correspondence_search.h"
 #include "led_search_model.h"
@@ -79,10 +80,11 @@ namespace xrt::tracking::constellation {
 namespace os = xrt::auxiliary::os;
 
 // Forward-declares
-struct CameraMosaic;
-struct Device;
 struct Camera;
+struct CameraMosaic;
 struct ConstellationTracker;
+struct DataRecorder;
+struct Device;
 
 struct DeviceState
 {
@@ -114,11 +116,16 @@ public: // Fields
 	std::array<DeviceState, XRT_CONSTELLATION_MAX_DEVICES> device_states{};
 	uint32_t device_count{};
 
+	uint32_t mosaic_index;
+	uint32_t camera_index;
+
 public: // Methods
 	std::optional<DeviceState *>
 	GetDeviceState(t_constellation_device_id_t device_id);
 
 	CameraSample(t_blob_observation &blobservation, Camera *camera);
+
+	CameraSample() = default;
 
 	void
 	MarkMatchingBlobs(ConstellationTracker *ct,
@@ -337,9 +344,10 @@ public: // Methods
 	~Device();
 };
 
-struct ConstellationTracker
+// Separate base struct with our interface implementations so that `ConstellationTrackerBase` remains a standard layout
+// type and we can safely use `container_of` on it.
+struct ConstellationTrackerBase
 {
-public: // Fields
 	xrt_frame_node node = {
 	    .next = nullptr,
 	    .break_apart = constellation_tracker_node_break_apart,
@@ -350,7 +358,11 @@ public: // Fields
 	    .type = XRT_TRACKING_TYPE_CONSTELLATION,
 	    .initial_offset = XRT_POSE_IDENTITY,
 	};
+};
 
+struct ConstellationTracker : public ConstellationTrackerBase
+{
+public: // Fields
 	//! Whether the constellation tracker is running
 	bool running = true;
 
@@ -364,11 +376,13 @@ public: // Fields
 	std::vector<std::unique_ptr<Device>> devices;
 	t_constellation_device_id_t next_device_id{0};
 
+	std::unique_ptr<DataRecorder> data_recorder{};
+
 public: // Methods
 	static ConstellationTracker *
 	Get(xrt_frame_node *node)
 	{
-		return container_of(node, ConstellationTracker, node);
+		return static_cast<ConstellationTracker *>(container_of(node, ConstellationTrackerBase, node));
 	}
 
 	ConstellationTracker(t_constellation_tracker_params *params);
