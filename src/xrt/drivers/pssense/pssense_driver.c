@@ -393,10 +393,11 @@ pssense_host_ts_to_device(struct pssense_device *pssense,
 		return false;
 	}
 
-	// Convert host-domain query time to device IMU time using the PSVR2TK clock offset.
-	// Corresponds to the inverse of PSVR2TK's libpad_deviceToHostHook conversion.
-	// See: PSVR2Toolkit/projects/psvr2_openvr_driver_ex/libpad_hooks.cpp
-	*out_device_timestamp_ns = host_timestamp_ns + (timepoint_ns)pssense->timing.filtered_offset_ns;
+	// Convert host-domain query time to device IMU time using the PSVR2TK clock offset and the LED sync latency
+	// offset. Corresponds to the inverse of PSVR2TK's libpad_deviceToHostHook conversion. See:
+	// PSVR2Toolkit/projects/psvr2_openvr_driver_ex/libpad_hooks.cpp
+	*out_device_timestamp_ns = host_timestamp_ns + (timepoint_ns)(pssense->timing.filtered_offset_ns) +
+	                           pssense->tracking.latest_led_sync_sample.device_host_latency_ns;
 	return true;
 }
 
@@ -981,14 +982,9 @@ pssense_timing_event_sink_push(struct t_timing_event_sink *sink, const struct t_
 
 	// update the LED settings
 	if (pssense->tracking.received_frames > 10 && pssense->timing.has_clock_offset) {
-		// Convert host-domain exposure timestamp to device IMU time using the PSVR2TK clock offset.
-		// Corresponds to PSVR2TK's libpad_hostToDeviceHook: device_time = host_time + filteredOffset.
-		// See: PSVR2Toolkit/projects/psvr2_openvr_driver_ex/libpad_hooks.cpp
-		timepoint_ns next_blink_time = pssense->tracking.last_exposure_local_timestamp_ns +
-		                               (timepoint_ns)pssense->timing.filtered_offset_ns;
-
 		uint8_t period_id = pssense->tracking.period_id;
 
+		// Update the sample from the LED sync routine
 		if (t_led_sync_get_sample(&pssense->tracking.led_sync_refinement,
 		                          &pssense->tracking.latest_led_sync_sample)) {
 			pssense->tracking.led_sync_sample_needs_sending = true;
@@ -997,7 +993,13 @@ pssense_timing_event_sink_push(struct t_timing_event_sink *sink, const struct t_
 			pssense->tracking.led_sequence_num += 1;
 		}
 
+		// Convert the timestamp, latency offset will be applied within here
+		timepoint_ns next_blink_time;
+		assert(pssense_host_ts_to_device(pssense, pssense->tracking.last_exposure_local_timestamp_ns,
+		                                 &next_blink_time));
+
 		next_blink_time += (int64_t)pssense->tracking.timing_fudge_100us * 100 * U_TIME_1US_IN_NS;
+		// Apply the fudge offset, which will line up the blink center with exposure center'
 		next_blink_time += (int64_t)pssense->tracking.latest_led_sync_sample.fudge_offset_ns;
 
 		// PSSENSE cycle position is the *center* of the exposure, but our LED sync assumes it's the start of

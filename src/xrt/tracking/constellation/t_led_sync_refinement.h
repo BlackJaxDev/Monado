@@ -50,7 +50,10 @@ struct t_led_sync_refinement_options
 //! A sample read out from the driver, to pass to the device in question.
 struct t_led_sync_sample
 {
-	//! The latency offset to add to the camera exposure time.
+	//! The latency offset from the device timestamps to the host.
+	time_duration_ns device_host_latency_ns;
+
+	//! The latency offset to apply to fudge the blink to line up as best as possible with the exposure.
 	time_duration_ns fudge_offset_ns;
 	//! The duration to make the LEDs blink for, in nanoseconds.
 	time_duration_ns blink_duration_ns;
@@ -103,8 +106,16 @@ struct t_led_sync_refinement
 	//! The current search phase
 	enum t_led_sync_phase phase;
 
-	//! The current estimated latency offset between the camera exposure and the LED blink.
-	time_duration_ns current_offset_ns;
+	/*!
+	 * The current estimated latency offset between the device and the host, in nanoseconds. This is what we are
+	 * trying to refine.
+	 */
+	time_duration_ns current_latency_offset_ns;
+	/*!
+	 * The amount of fudge between the latency offset and the actual blink start time, in nanoseconds, so we can
+	 * place the blink at the optimal time for the exposure.
+	 */
+	time_duration_ns current_blink_fudge_ns;
 
 	//! How long the LEDs blink for, each frame.
 	time_duration_ns current_blink_duration_ns;

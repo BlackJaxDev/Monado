@@ -48,21 +48,25 @@ frames_since_sample_apply(struct t_led_sync_refinement *refinement, timepoint_ns
 
 static void
 set_offset_duration(struct t_led_sync_refinement *refinement,
+                    time_duration_ns latency_offset_ns,
                     time_duration_ns fudge_offset_ns,
                     time_duration_ns blink_duration_ns)
 {
-	refinement->current_offset_ns = fudge_offset_ns;
+	refinement->current_latency_offset_ns = latency_offset_ns;
+	refinement->current_blink_fudge_ns = fudge_offset_ns;
 	refinement->current_blink_duration_ns = blink_duration_ns;
 
 	refinement->has_sample_for_driver = true;
 	refinement->sample_applied = false;
 	refinement->sample_for_driver = XRT_C11_COMPOUND(struct t_led_sync_sample){
+	    .device_host_latency_ns = latency_offset_ns,
 	    .fudge_offset_ns = fudge_offset_ns,
 	    .blink_duration_ns = blink_duration_ns,
 	};
 
-	LOG_TRACE(refinement, "Setting offset to %" PRId64 "ns and blink duration to %" PRId64 "ns", fudge_offset_ns,
-	          blink_duration_ns);
+	LOG_TRACE(refinement,
+	          "Setting offset to %" PRId64 "ns with fudge %" PRId64 "ns and blink duration to %" PRId64 "ns",
+	          latency_offset_ns, fudge_offset_ns, blink_duration_ns);
 }
 
 //! Gets the period to iterate over when searching for a latency offset.
@@ -96,12 +100,12 @@ set_phase_locked(struct t_led_sync_refinement *refinement, enum t_led_sync_phase
 		refinement->found_left_edge_ns = -1;
 		refinement->found_right_edge_ns = -1;
 
-		set_offset_duration(refinement, 0, refinement->current_blink_duration_ns);
+		set_offset_duration(refinement, 0, 0, refinement->current_blink_duration_ns);
 		break;
 	}
 	case T_LED_SYNC_SEARCH_PHASE_FIND_RIGHT_EDGE: {
 		// Left bound is the current offset
-		refinement->binary_search_state.left_bound_ns = refinement->current_offset_ns;
+		refinement->binary_search_state.left_bound_ns = refinement->current_blink_fudge_ns;
 		// Right bound is the start of the next exposure minus the blink duration, we don't want to blink into
 		// the next frame, rather start at zero, since latency will always be >0.
 		refinement->binary_search_state.right_bound_ns =
@@ -116,7 +120,7 @@ set_phase_locked(struct t_led_sync_refinement *refinement, enum t_led_sync_phase
 		time_duration_ns new_offset_ns =
 		    (refinement->binary_search_state.right_bound_ns + refinement->binary_search_state.left_bound_ns) /
 		    2;
-		set_offset_duration(refinement, new_offset_ns, refinement->current_blink_duration_ns);
+		set_offset_duration(refinement, 0, new_offset_ns, refinement->current_blink_duration_ns);
 
 		break;
 	}
@@ -135,7 +139,7 @@ set_phase_locked(struct t_led_sync_refinement *refinement, enum t_led_sync_phase
 		time_duration_ns new_offset_ns =
 		    (refinement->binary_search_state.right_bound_ns + refinement->binary_search_state.left_bound_ns) /
 		    2;
-		set_offset_duration(refinement, new_offset_ns, refinement->current_blink_duration_ns);
+		set_offset_duration(refinement, 0, new_offset_ns, refinement->current_blink_duration_ns);
 
 		break;
 	}
@@ -144,13 +148,20 @@ set_phase_locked(struct t_led_sync_refinement *refinement, enum t_led_sync_phase
 		assert(refinement->found_right_edge_ns > -1);
 		assert(refinement->found_left_edge_ns > -1);
 
-		// Set the offset so that the center of the blink is at the center of the exposure
-		time_duration_ns new_offset_ns =
-		    ((refinement->found_left_edge_ns + refinement->found_right_edge_ns) / 2) -
-		    (refinement->current_blink_duration_ns / 2);
-		set_offset_duration(refinement, new_offset_ns, refinement->current_blink_duration_ns);
+		// Find the latency offset, the offset needing to be applied to get blink start to line up with exposure
+		// start, this is the transfer latency from the controller->host.
+		time_duration_ns new_latency_offset_ns = refinement->found_left_edge_ns;
 
-		LOG_DEBUG(refinement, "Maintaining offset at: %" PRId64 "ns", refinement->current_offset_ns);
+		// Set the offset so that the center of the blink is at the center of the exposure, since latency and
+		// fudge offset are added together
+		time_duration_ns new_offset_ns =
+		    ((refinement->found_right_edge_ns - refinement->found_left_edge_ns) / 2) -
+		    (refinement->current_blink_duration_ns / 2);
+
+		set_offset_duration(refinement, new_latency_offset_ns, new_offset_ns,
+		                    refinement->current_blink_duration_ns);
+
+		LOG_DEBUG(refinement, "Maintaining offset at: %" PRId64 "ns", refinement->current_latency_offset_ns);
 
 		break;
 	}
@@ -163,12 +174,14 @@ handle_find_initial_offset(struct t_led_sync_refinement *refinement)
 {
 	if (refinement->frames_since_last_visually_seen > MAX_SAMPLE_LATENCY) {
 		const time_duration_ns search_period_ns = get_search_period_locked(refinement);
-		const time_duration_ns new_offset_ns =
-		    (refinement->current_offset_ns + search_period_ns) % refinement->exposure_interval_ns;
+		const time_duration_ns new_fudge_offset_ns =
+		    (refinement->current_blink_fudge_ns + search_period_ns) % refinement->exposure_interval_ns;
 
-		LOG_DEBUG(refinement, "Device hasn't been seen, trying offset: %" PRId64 "ns", new_offset_ns);
+		LOG_DEBUG(refinement, "Device hasn't been seen, trying offset: %" PRId64 "ns", new_fudge_offset_ns);
 
-		set_offset_duration(refinement, new_offset_ns, refinement->current_blink_duration_ns);
+		// Scan the fudge offset around instead of latency, so latency isn't jumping around at random and
+		// confusing time conversion math.
+		set_offset_duration(refinement, 0, new_fudge_offset_ns, refinement->current_blink_duration_ns);
 	} else {
 		LOG_DEBUG(refinement, "Device has been seen, moving to find edge phases");
 
@@ -187,37 +200,37 @@ handle_find_right_edge(struct t_led_sync_refinement *refinement)
 		          refinement->frames_since_last_visually_seen);
 
 		// We didn't see the device
-		refinement->binary_search_state.right_bound_ns = refinement->current_offset_ns;
+		refinement->binary_search_state.right_bound_ns = refinement->current_blink_fudge_ns;
 
 		time_duration_ns new_offset_ns =
 		    (refinement->binary_search_state.left_bound_ns + refinement->binary_search_state.right_bound_ns) /
 		    2;
 
-		set_offset_duration(refinement, new_offset_ns, refinement->current_blink_duration_ns);
+		set_offset_duration(refinement, 0, new_offset_ns, refinement->current_blink_duration_ns);
 
 	} else {
 		LOG_DEBUG(refinement, "Device has been seen, advancing binary search with right side closer");
 
 		// We saw the device
-		refinement->binary_search_state.left_bound_ns = refinement->current_offset_ns;
+		refinement->binary_search_state.left_bound_ns = refinement->current_blink_fudge_ns;
 
 		time_duration_ns new_offset_ns =
 		    (refinement->binary_search_state.left_bound_ns + refinement->binary_search_state.right_bound_ns) /
 		    2;
 
-		set_offset_duration(refinement, new_offset_ns, refinement->current_blink_duration_ns);
+		set_offset_duration(refinement, 0, new_offset_ns, refinement->current_blink_duration_ns);
 	}
 
 	bool done = refinement->binary_search_state.right_bound_ns - refinement->binary_search_state.left_bound_ns <
 	            change_good_cutoff(refinement);
 	if (done) {
 		// We found a good enough offset for the right edge, move on to finding the left edge.
-		refinement->found_right_edge_ns = refinement->current_offset_ns;
+		refinement->found_right_edge_ns = refinement->current_blink_fudge_ns;
 
 		LOG_DEBUG(refinement,
 		          "Found right edge at offset: %" PRId64 "ns. Difference %" PRId64
 		          "ns was lower than cutoff %" PRId64 "ns, moving to find left edge phase",
-		          refinement->current_offset_ns,
+		          refinement->current_blink_fudge_ns,
 		          refinement->binary_search_state.right_bound_ns -
 		              refinement->binary_search_state.left_bound_ns,
 		          change_good_cutoff(refinement));
@@ -237,26 +250,26 @@ handle_find_left_edge(struct t_led_sync_refinement *refinement)
 
 		// We didn't see the device
 		refinement->binary_search_state.left_bound_ns =
-		    refinement->current_offset_ns + refinement->current_blink_duration_ns;
+		    refinement->current_blink_fudge_ns + refinement->current_blink_duration_ns;
 
 		time_duration_ns new_offset_ns =
 		    ((refinement->binary_search_state.left_bound_ns + refinement->binary_search_state.right_bound_ns) /
 		     2);
 		// Set the new offset so that we're moving the right edge of the blink to the left edge of the exposure
-		set_offset_duration(refinement, new_offset_ns - refinement->current_blink_duration_ns,
+		set_offset_duration(refinement, 0, new_offset_ns - refinement->current_blink_duration_ns,
 		                    refinement->current_blink_duration_ns);
 	} else {
 		LOG_DEBUG(refinement, "Device has been seen, advancing binary search with left side closer");
 
 		// We saw the device
 		refinement->binary_search_state.right_bound_ns =
-		    refinement->current_offset_ns + refinement->current_blink_duration_ns;
+		    refinement->current_blink_fudge_ns + refinement->current_blink_duration_ns;
 
 		time_duration_ns new_offset_ns =
 		    (refinement->binary_search_state.left_bound_ns + refinement->binary_search_state.right_bound_ns) /
 		    2;
 		// Set the new offset so that we're moving the right edge of the blink to the left edge of the exposure
-		set_offset_duration(refinement, new_offset_ns - refinement->current_blink_duration_ns,
+		set_offset_duration(refinement, 0, new_offset_ns - refinement->current_blink_duration_ns,
 		                    refinement->current_blink_duration_ns);
 	}
 
@@ -264,12 +277,13 @@ handle_find_left_edge(struct t_led_sync_refinement *refinement)
 	            change_good_cutoff(refinement);
 	if (done) {
 		// We found a good enough offset for the left edge, we can maintain the offset now.
-		refinement->found_left_edge_ns = refinement->current_offset_ns + refinement->current_blink_duration_ns;
+		refinement->found_left_edge_ns =
+		    refinement->current_blink_fudge_ns + refinement->current_blink_duration_ns;
 
 		LOG_DEBUG(refinement,
 		          "Found left edge at offset: %" PRId64 "ns. Difference %" PRId64
 		          "ns was lower than cutoff %" PRId64 "ns, moving to maintain offset phase",
-		          refinement->current_offset_ns,
+		          refinement->current_blink_fudge_ns,
 		          refinement->binary_search_state.right_bound_ns -
 		              refinement->binary_search_state.left_bound_ns,
 		          change_good_cutoff(refinement));
@@ -380,13 +394,15 @@ t_led_sync_refinement_init(struct t_led_sync_refinement *refinement,
 	    .has_sample_for_driver = true,
 	    .sample_for_driver =
 	        {
-	            .fudge_offset_ns = refinement->current_offset_ns,
-	            .blink_duration_ns = refinement->current_blink_duration_ns,
+	            .device_host_latency_ns = 0,
+	            .fudge_offset_ns = 0,
+	            .blink_duration_ns = options->initial_blink_duration_ns,
 	        },
 	    .sample_applied = false,
 
 	    .phase = T_LED_SYNC_SEARCH_PHASE_INIT,
-	    .current_offset_ns = 0,
+	    .current_latency_offset_ns = 0,
+	    .current_blink_fudge_ns = 0,
 	    .current_blink_duration_ns = options->initial_blink_duration_ns,
 	    .frames_since_last_visually_seen = 0,
 	    .current_sequence_id = 0,
@@ -427,7 +443,8 @@ t_led_sync_refinement_init(struct t_led_sync_refinement *refinement,
 
 	u_var_add_gui_header(refinement, NULL, "State");
 	u_var_add_ro_u32(refinement, (uint32_t *)&refinement->phase, "phase");
-	u_var_add_ro_i64_ns(refinement, &refinement->current_offset_ns, "current_offset_ns");
+	u_var_add_ro_i64_ns(refinement, &refinement->current_latency_offset_ns, "current_latency_offset_ns");
+	u_var_add_ro_i64_ns(refinement, &refinement->current_blink_fudge_ns, "current_blink_fudge_ns");
 	u_var_add_ro_i64_ns(refinement, &refinement->current_blink_duration_ns, "current_blink_duration_ns");
 	u_var_add_ro_u32(refinement, &refinement->frames_since_last_visually_seen, "frames_since_last_visually_seen");
 	u_var_add_ro_u32(refinement, &refinement->current_sequence_id, "current_sequence_id");
