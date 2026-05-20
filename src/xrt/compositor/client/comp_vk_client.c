@@ -270,6 +270,23 @@ client_vk_swapchain_destroy(struct xrt_swapchain *xsc)
 	struct client_vk_compositor *c = sc->c;
 	struct vk_bundle *vk = &c->vk;
 
+	vk_queue_lock(vk->main_queue);
+	vk->vkQueueWaitIdle(vk->main_queue->queue);
+	vk_queue_unlock(vk->main_queue);
+
+	vk_cmd_pool_lock(&c->pool);
+	for (uint32_t i = 0; i < sc->base.base.image_count; i++) {
+		if (sc->acquire[i] != VK_NULL_HANDLE) {
+			vk->vkFreeCommandBuffers(vk->device, c->pool.pool, 1, &sc->acquire[i]);
+			sc->acquire[i] = VK_NULL_HANDLE;
+		}
+		if (sc->release[i] != VK_NULL_HANDLE) {
+			vk->vkFreeCommandBuffers(vk->device, c->pool.pool, 1, &sc->release[i]);
+			sc->release[i] = VK_NULL_HANDLE;
+		}
+	}
+	vk_cmd_pool_unlock(&c->pool);
+
 	for (uint32_t i = 0; i < sc->base.base.image_count; i++) {
 		if (sc->base.images[i] != VK_NULL_HANDLE) {
 			vk->vkDestroyImage(vk->device, sc->base.images[i], NULL);
