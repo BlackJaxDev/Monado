@@ -121,6 +121,24 @@ static const char *driver_list[] = {
 #endif
 };
 
+static bool
+rift_is_oculus(struct xrt_prober *xp, struct xrt_prober_device *dev)
+{
+	unsigned char manufacturer[128] = {0};
+	int result = xrt_prober_get_string_descriptor(xp, dev, XRT_PROBER_STRING_MANUFACTURER, manufacturer,
+	                                              sizeof(manufacturer));
+	if (result < 0) {
+		return false;
+	}
+
+	// Some non-oculus devices (VR-Tek HMDs) reuse the same USB IDs as the oculus headsets, so we should check the
+	// manufacturer
+	if (strncmp((const char *)manufacturer, "Oculus VR, Inc.", sizeof(manufacturer)) != 0) {
+		return false;
+	}
+
+	return true;
+}
 
 /*
  *
