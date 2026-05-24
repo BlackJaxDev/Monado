@@ -11,11 +11,23 @@
 #include "common/openvr_error.hpp"
 #include "common/openvr_logger.hpp"
 
+#include "XRTVRChaperone.hpp"
+#include "XRTVRChaperoneSetup.hpp"
 #include "XRTVRClientCore.hpp"
 #include "XRTVRCompositor.hpp"
 #include "XRTVRRenderModels.hpp"
 #include "XRTVRSystem.hpp"
 
+#include "old/XRTVRChaperone_003.hpp"
+#include "old/XRTVRChaperoneSetup_005.hpp"
+#include "old/XRTVRCompositor_022.hpp"
+#include "old/XRTVRCompositor_024.hpp"
+#include "old/XRTVRCompositor_026.hpp"
+#include "old/XRTVRCompositor_027.hpp"
+#include "old/XRTVRCompositor_028.hpp"
+#include "old/XRTVRSystem_019.hpp"
+#include "old/XRTVRSystem_020.hpp"
+#include "old/XRTVRSystem_021.hpp"
 #include "old/XRTVRSystem_023.hpp"
 
 #include <cstring>

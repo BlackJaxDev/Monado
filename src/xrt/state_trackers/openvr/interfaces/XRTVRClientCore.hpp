@@ -29,7 +29,19 @@
 namespace xrt::state_trackers::openvr {
 
 #define SUPPORTED_CORE_INTERFACES(_) _(VRClientCore, _003)
-#define SUPPORTED_INTERFACES(_) _(VRCompositor, _029) _(VRRenderModels, _006) _(VRSystem, _026) _(VRSystem, _023)
+#define SUPPORTED_INTERFACES(_)                                                                                        \
+	_(VRRenderModels, _006)                                                                                        \
+	_(VRChaperone, _003)                                                                                           \
+	_(VRChaperone, _004)                                                                                           \
+	_(VRChaperoneSetup, _005)                                                                                      \
+	_(VRChaperoneSetup, _006)                                                                                      \
+	_(VRSystem, _021)                                                                                              \
+	_(VRSystem, _020)                                                                                              \
+	_(VRSystem, _019)                                                                                              \
+	_(VRSystem, _023)                                                                                              \
+	_(VRSystem, _026)                                                                                              \
+	_(VRCompositor, _022)                                                                                          \
+	_(VRCompositor, _024) _(VRCompositor, _026) _(VRCompositor, _027) _(VRCompositor, _028) _(VRCompositor, _029)
 
 class XRTVRClientCore_003 : public vr::IVRClientCore_003
 {

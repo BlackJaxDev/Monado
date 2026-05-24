@@ -16,6 +16,10 @@ add_library(
 	common/openvr_math.hpp
 	compositor/openvr_compositor.cpp
 	compositor/openvr_compositor.hpp
+	interfaces/XRTVRChaperone.cpp
+	interfaces/XRTVRChaperone.hpp
+	interfaces/XRTVRChaperoneSetup.cpp
+	interfaces/XRTVRChaperoneSetup.hpp
 	interfaces/XRTVRClientCore.cpp
 	interfaces/XRTVRClientCore.hpp
 	interfaces/XRTVRCompositor.cpp
@@ -24,6 +28,16 @@ add_library(
 	interfaces/XRTVRRenderModels.hpp
 	interfaces/XRTVRSystem.cpp
 	interfaces/XRTVRSystem.hpp
+	interfaces/old/XRTVRChaperone_003.hpp
+	interfaces/old/XRTVRChaperoneSetup_005.hpp
+	interfaces/old/XRTVRCompositor_022.hpp
+	interfaces/old/XRTVRCompositor_024.hpp
+	interfaces/old/XRTVRCompositor_026.hpp
+	interfaces/old/XRTVRCompositor_027.hpp
+	interfaces/old/XRTVRCompositor_028.hpp
+	interfaces/old/XRTVRSystem_019.hpp
+	interfaces/old/XRTVRSystem_020.hpp
+	interfaces/old/XRTVRSystem_021.hpp
 	interfaces/old/XRTVRSystem_023.hpp
 	)
 
