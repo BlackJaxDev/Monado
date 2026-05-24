@@ -48,9 +48,18 @@ public: // Fields
 	std::shared_ptr<Devices> devices{};
 	std::shared_ptr<Events> events{};
 
+	vr::EVRApplicationType application_type{};
+
 #define XRTVR_INTERFACE_MEMBER(name, version) std::shared_ptr<vr::I##name##version> name##version{nullptr};
 	SUPPORTED_INTERFACES(XRTVR_INTERFACE_MEMBER)
 #undef XRTVR_INTERFACE_MEMBER
+
+private: // Methods
+	bool
+	IsHeadless()
+	{
+		return this->application_type == vr::EVRApplicationType::VRApplication_Background;
+	}
 
 public: // Methods
 	vr::EVRInitError

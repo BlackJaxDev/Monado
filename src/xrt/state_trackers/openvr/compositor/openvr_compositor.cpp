@@ -176,11 +176,15 @@ Compositor::Submit(openvr_logger &logger,
                    const vr::VRTextureBounds_t &bounds,
                    vr::EVRSubmitFlags nSubmitFlags)
 {
-	// @todo return IsNotSceneApplication if the application is not a scene application
 	// @todo return DoNotHaveFocus if the application doesn't have focus
 	// @todo return TextureIsOnWrongDevice when we detect the texture isn't using the device from GetOutputInfo
 	// @todo return SharedTexturesNotSupported when the app doesn't use CreateDXGIFactory1 or later
 	// @todo return TextureUsesUnsupportedFormat when the app uses a DXGI non-sharable format
+
+	// We don't have a compositor eg. we're not a scene application.
+	if (this->xsysc == nullptr) {
+		return vr::EVRCompositorError::VRCompositorError_IsNotSceneApplication;
+	}
 
 	// Eye has already been submit
 	if (this->frame_eye_states[eye].has_value()) {

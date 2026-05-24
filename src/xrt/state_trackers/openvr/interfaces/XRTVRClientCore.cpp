@@ -32,9 +32,13 @@ XRTVRClientCore_003::Init(vr::EVRApplicationType eApplicationType, const char *p
 
 	xrt_result_t xret;
 
-	if (eApplicationType != vr::VRApplication_Scene) {
-		return vr::EVRInitError::VRInitError_Init_InvalidApplicationType;
+	switch (eApplicationType) {
+	case vr::EVRApplicationType::VRApplication_Background:
+	case vr::EVRApplicationType::VRApplication_Scene: break;
+	default: return vr::EVRInitError::VRInitError_Init_InvalidApplicationType;
 	}
+
+	this->application_type = eApplicationType;
 
 	xrt_instance_info i_info = {
 	    .app_info =
@@ -58,12 +62,14 @@ XRTVRClientCore_003::Init(vr::EVRApplicationType eApplicationType, const char *p
 
 	xret = xrt_instance_create(&i_info, &this->xinst);
 	if (xret != XRT_SUCCESS) {
+		OPENVR_LOG_ERROR_XRET(logger, "Failed to create xrt_instance", xret);
 		return xret_to_init_error(xret);
 	}
 
 	bool is_available;
 	xret = xrt_instance_is_system_available(this->xinst, &is_available);
 	if (xret != XRT_SUCCESS) {
+		OPENVR_LOG_ERROR_XRET(logger, "Failed to check if system is available", xret);
 		return xret_to_init_error(xret);
 	}
 
@@ -71,8 +77,10 @@ XRTVRClientCore_003::Init(vr::EVRApplicationType eApplicationType, const char *p
 		return vr::EVRInitError::VRInitError_Init_HmdNotFound;
 	}
 
-	xret = xrt_instance_create_system(this->xinst, &this->xsys, &this->xsysd, &this->xso, &this->xsysc);
+	xret = xrt_instance_create_system(this->xinst, &this->xsys, &this->xsysd, &this->xso,
+	                                  this->IsHeadless() ? nullptr : &this->xsysc);
 	if (xret != XRT_SUCCESS) {
+		OPENVR_LOG_ERROR_XRET(logger, "Failed to create xrt_system", xret);
 		return xret_to_init_error(xret);
 	}
 
@@ -81,8 +89,9 @@ XRTVRClientCore_003::Init(vr::EVRApplicationType eApplicationType, const char *p
 	    .flags = 0,
 	    .z_order = 0,
 	};
-	xret = xrt_system_create_session(this->xsys, &xsi, &this->xs, &this->xcn);
+	xret = xrt_system_create_session(this->xsys, &xsi, &this->xs, this->IsHeadless() ? nullptr : &this->xcn);
 	if (xret != XRT_SUCCESS) {
+		OPENVR_LOG_ERROR_XRET(logger, "Failed to create xrt_session", xret);
 		return xret_to_init_error(xret);
 	}
 
@@ -165,7 +174,7 @@ XRTVRClientCore_003::GetGenericInterface(const char *pchNameAndVersion, vr::EVRI
 	openvr_logger logger;
 	OPENVR_LOGGER_INIT(logger);
 
-	SET_ERROR(peError, vr::EVRInitError::VRInitError_Unknown);
+	SET_ERROR(peError, vr::EVRInitError::VRInitError_None);
 
 	OPENVR_LOG_TRACE(logger, "GetGenericInterface called with '%s'", pchNameAndVersion);
 
@@ -239,12 +248,22 @@ XRTVRClientCore_003::BIsHmdPresent()
 const char *
 XRTVRClientCore_003::GetEnglishStringForHmdError(vr::EVRInitError eError)
 {
+	openvr_logger logger;
+	OPENVR_LOGGER_INIT(logger);
+
+	OPENVR_LOG_TRACE(logger, "GetEnglishStringForHmdError called with error code %d", static_cast<int>(eError));
+
 	return "TODO: GetEnglishStringForHmdError";
 }
 
 const char *
 XRTVRClientCore_003::GetIDForVRInitError(vr::EVRInitError eError)
 {
+	openvr_logger logger;
+	OPENVR_LOGGER_INIT(logger);
+
+	OPENVR_LOG_TRACE(logger, "GetIDForVRInitError called with error code %d", static_cast<int>(eError));
+
 	return "TODO: GetIDForVRInitError";
 }
 
