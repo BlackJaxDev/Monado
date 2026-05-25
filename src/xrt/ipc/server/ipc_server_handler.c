@@ -784,7 +784,6 @@ ipc_handle_space_locate_spaces(volatile struct ipc_client_state *ics,
 {
 	IPC_TRACE_MARKER();
 	struct ipc_message_channel *imc = (struct ipc_message_channel *)&ics->imc;
-	struct ipc_server *s = ics->server;
 
 	struct xrt_space_overseer *xso = ics->server->xso;
 	struct xrt_space *base_space = NULL;
@@ -793,7 +792,7 @@ ipc_handle_space_locate_spaces(volatile struct ipc_client_state *ics,
 	struct xrt_pose *offsets = U_TYPED_ARRAY_CALLOC(struct xrt_pose, space_count);
 	struct xrt_space_relation *out_relations = U_TYPED_ARRAY_CALLOC(struct xrt_space_relation, space_count);
 
-	xrt_result_t xret;
+	xrt_result_t xret = XRT_SUCCESS;
 
 	os_mutex_lock(&ics->server->global_state.lock);
 
@@ -802,8 +801,6 @@ ipc_handle_space_locate_spaces(volatile struct ipc_client_state *ics,
 	// we need to send back whether allocation succeeded so the client knows whether to send more data
 	if (space_ids == NULL) {
 		xret = XRT_ERROR_ALLOCATION;
-	} else {
-		xret = XRT_SUCCESS;
 	}
 
 	xret = ipc_send(imc, &xret, sizeof(enum xrt_result));
@@ -815,10 +812,11 @@ ipc_handle_space_locate_spaces(volatile struct ipc_client_state *ics,
 
 	// only after sending the allocation result can we skip to the end in the allocation error case
 	if (space_ids == NULL) {
-		IPC_ERROR(s, "Failed to allocate space for receiving spaces ids");
+		IPC_ERROR(ics->server, "Failed to allocate space for receiving spaces ids");
 		xret = XRT_ERROR_ALLOCATION;
 		goto out_locate_spaces;
 	}
+
 
 	xret = ipc_receive(imc, space_ids, space_count * sizeof(uint32_t));
 	if (xret != XRT_SUCCESS) {
@@ -871,6 +869,7 @@ ipc_handle_space_locate_spaces(volatile struct ipc_client_state *ics,
 	}
 
 out_locate_spaces:
+	free(space_ids);
 	free(xspaces);
 	free(offsets);
 	free(out_relations);
