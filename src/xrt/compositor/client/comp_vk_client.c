@@ -963,7 +963,7 @@ client_vk_compositor_blit_to_swapchain(struct client_vk_compositor *c,
 		return XRT_ERROR_VULKAN;
 	}
 
-	struct vk_cmd_blit_image_info blit_info = {
+	struct vk_cmd_image_transfer_info blit_info = {
 	    .src =
 	        {
 	            .params = *src_params,
