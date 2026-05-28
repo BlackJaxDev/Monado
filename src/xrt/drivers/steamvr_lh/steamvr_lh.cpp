@@ -8,6 +8,30 @@
  * @ingroup drv_steamvr_lh
  */
 
+#include "xrt/xrt_config_arch.h"
+#include "xrt/xrt_system.h"
+
+#include "interfaces/context.hpp"
+
+#include "b_hand_tracker.h"
+
+#include "util/u_var.h"
+#include "util/u_device.h"
+#include "util/u_misc.h"
+#include "util/u_device.h"
+#include "util/u_device.h"
+
+#include "vive/vive_bindings.h"
+
+#include "math/m_api.h"
+
+#include "openvr_driver.h"
+
+#include "vdf_parser.hpp"
+
+#include "steamvr_lh_interface.h"
+#include "device.hpp"
+
 #include <cstring>
 #include <dlfcn.h>
 #include <memory>
@@ -17,22 +41,6 @@
 #include <filesystem>
 #include <istream>
 #include <thread>
-
-#include "openvr_driver.h"
-#include "util/u_var.h"
-#include "vdf_parser.hpp"
-#include "steamvr_lh_interface.h"
-#include "interfaces/context.hpp"
-#include "device.hpp"
-#include "util/u_device.h"
-#include "util/u_misc.h"
-#include "util/u_device.h"
-#include "vive/vive_bindings.h"
-#include "util/u_device.h"
-#include "xrt/xrt_config_arch.h"
-#include "xrt/xrt_system.h"
-
-#include "math/m_api.h"
 
 namespace {
 
@@ -982,6 +990,7 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
 
 	xsysd->destroy = destroy;
 	xsysd->get_roles = get_roles;
+	xsysd->create_hand_tracker = b_hand_tracker_create;
 
 	// Include the HMD
 	if (svrs->ctx->hmd) {
