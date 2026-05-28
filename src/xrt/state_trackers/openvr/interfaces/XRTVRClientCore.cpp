@@ -219,6 +219,12 @@ XRTVRClientCore_003::BIsHmdPresent()
 {
 	xrt_result_t xret;
 
+	// If we have a created system then shortcut this to `true`. Because Climbey is polling this synchronously every
+	// single frame while the game runs. On the main thread.
+	if (this->xsys != nullptr) {
+		return true;
+	}
+
 	xrt_instance_info i_info = {
 	    .app_info =
 	        {
