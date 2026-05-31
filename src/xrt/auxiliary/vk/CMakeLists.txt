@@ -48,6 +48,8 @@ add_library(
 	vk_enumerate.c
 	vk_extensions_helpers.c
 	vk_extensions_helpers.h
+	vk_format.c
+	vk_format.h
 	vk_function_loaders.c
 	vk_helpers.c
 	vk_helpers.h
