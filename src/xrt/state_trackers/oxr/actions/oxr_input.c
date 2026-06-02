@@ -496,11 +496,6 @@ oxr_action_create(struct oxr_logger *log,
 	// specified for this action.
 	oxr_subaction_paths_accumulate_except_any(&(act_set->data->permitted_subaction_paths), &subaction_paths);
 
-	// Any subaction paths allowed for this action are allowed for this
-	// action set. But, do not accumulate "any" - it just means none were
-	// specified for this action.
-	oxr_subaction_paths_accumulate_except_any(&(act_set->data->permitted_subaction_paths), &subaction_paths);
-
 	snprintf(act_ref->name, sizeof(act_ref->name), "%s", createInfo->actionName);
 
 	h_ret = oxr_pair_hashset_insert_str_c( //
