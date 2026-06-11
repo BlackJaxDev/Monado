@@ -6,12 +6,7 @@
 # Shaders headers
 #
 
-set(DEPENDS
-    blit.inc.glsl
-    hsv.inc.glsl
-    layer_defines.inc.glsl
-    srgb.inc.glsl
-	)
+set(DEPENDS blit.inc.glsl hsv.inc.glsl layer_defines.inc.glsl srgb.inc.glsl)
 
 set(SHADERS
     blit.comp
@@ -29,8 +24,6 @@ set(SHADERS
     layer_projection.frag
     layer_quad.vert
     layer_quad.frag
-	DEPENDS
-	${DEPENDS}
 	)
 
 # Compile all the non-specialized shaders
@@ -40,6 +33,8 @@ spirv_shaders(
 	1.0 # Currently targeting Vulkan 1.0
 	SOURCES
 	${SHADERS}
+	DEPENDS
+	${DEPENDS}
 	)
 
 # Create a custom target that depends on the shader headers.
@@ -52,16 +47,17 @@ add_custom_target(comp_shaders_headers DEPENDS ${SHADER_HEADERS})
 # Shader library
 #
 
-add_library(comp_shaders STATIC ${SHADER_HEADERS} render_shaders_interface.h render_shaders.c)
+add_library(aux_shaders STATIC ${SHADER_HEADERS} render_shaders_interface.h render_shaders.c)
 
 target_link_libraries(
-	comp_shaders
+	aux_shaders
 	PUBLIC xrt-interfaces aux_vk comp_includes
 	PRIVATE aux_util
 	)
 
 # Ensure shader headers are built before compiling this library
-add_dependencies(comp_shaders comp_shaders_headers)
+add_dependencies(aux_shaders comp_shaders_headers)
 
 # Shaders - marked SYSTEM so we get no warnings
-target_include_directories(comp_shaders SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(aux_shaders SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(aux_shaders PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

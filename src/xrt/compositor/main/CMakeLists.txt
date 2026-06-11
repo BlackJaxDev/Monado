@@ -32,7 +32,7 @@ target_link_libraries(
 		aux_os
 		aux_vk
 		comp_util
-		comp_render
+		aux_render
 	)
 
 if(XRT_HAVE_XCB)

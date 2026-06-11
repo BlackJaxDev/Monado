@@ -5,7 +5,7 @@
  * @brief  Shared resources for rendering.
  * @author Lubosz Sarnecki <lubosz.sarnecki@collabora.com>
  * @author Jakob Bornecrantz <jakob@collabora.com>
- * @ingroup comp_render
+ * @ingroup aux_render
  */
 
 #include "xrt/xrt_device.h"

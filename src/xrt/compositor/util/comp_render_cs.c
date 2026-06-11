@@ -26,7 +26,7 @@
 
 #include "render/render_interface.h"
 
-#include "shaders/layer_defines.inc.glsl"
+#include "layer_defines.inc.glsl"
 
 #include "util/comp_render.h"
 #include "util/comp_render_helpers.h"

@@ -4,7 +4,7 @@
  * @file
  * @brief  Code for handling distortion resources (not shaders).
  * @author Jakob Bornecrantz <jakob@collabora.com>
- * @ingroup comp_render
+ * @ingroup aux_render
  */
 
 #include "xrt/xrt_device.h"

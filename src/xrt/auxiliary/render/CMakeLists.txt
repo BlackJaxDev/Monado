@@ -7,7 +7,7 @@
 #
 
 add_library(
-	comp_render STATIC
+	aux_render STATIC
 	render_buffer.c
 	render_compute.c
 	render_distortion.c
@@ -19,7 +19,12 @@ add_library(
 	)
 # The aux_vk library needs to be public to include Vulkan.
 target_link_libraries(
-	comp_render
-	PUBLIC xrt-interfaces aux_vk comp_includes comp_shaders
+	aux_render
+	PUBLIC xrt-interfaces aux_vk comp_includes aux_shaders
 	PRIVATE aux_util aux_os
 	)
+
+# Shaders library
+if(XRT_MODULE_AUX_SHADERS)
+	add_subdirectory(shaders)
+endif()

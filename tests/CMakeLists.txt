@@ -97,7 +97,7 @@ if(XRT_HAVE_VULKAN)
 	target_link_libraries(
 		tests_comp_client_vulkan PRIVATE comp_client comp_mock comp_util aux_vk
 		)
-	target_link_libraries(tests_uv_to_tangent PRIVATE comp_render)
+	target_link_libraries(tests_uv_to_tangent PRIVATE aux_render)
 endif()
 
 if(XRT_FEATURE_OPENXR)

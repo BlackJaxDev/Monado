@@ -4,7 +4,7 @@
  * @file
  * @brief  Sub allocation functions.
  * @author Jakob Bornecrantz <jakob@collabora.com>
- * @ingroup comp_render
+ * @ingroup aux_render
  */
 
 #include "vk/vk_mini_helpers.h"

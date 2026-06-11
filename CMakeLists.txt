@@ -270,10 +270,10 @@ option_with_deps(XRT_MODULE_COMPOSITOR_MAIN "Build main compositor host function
 	XRT_MODULE_COMPOSITOR
 	XRT_HAVE_VULKAN
 	)
+option_with_deps(XRT_MODULE_AUX_RENDER "Build auxiliary render library" DEPENDS XRT_MODULE_COMPOSITOR XRT_HAVE_VULKAN)
+option_with_deps(XRT_MODULE_AUX_SHADERS "Build render shaders" DEPENDS XRT_MODULE_COMPOSITOR XRT_HAVE_VULKAN)
 option_with_deps(XRT_MODULE_COMPOSITOR_MULTI "Build multi-client compositor library" DEPENDS XRT_MODULE_COMPOSITOR)
 option_with_deps(XRT_MODULE_COMPOSITOR_NULL "Build testing null compositor" DEPENDS XRT_MODULE_COMPOSITOR XRT_HAVE_VULKAN)
-option_with_deps(XRT_MODULE_COMPOSITOR_RENDER "Build compositor render library" DEPENDS XRT_MODULE_COMPOSITOR XRT_HAVE_VULKAN)
-option_with_deps(XRT_MODULE_COMPOSITOR_SHADERS "Build compositor shaders" DEPENDS XRT_MODULE_COMPOSITOR XRT_HAVE_VULKAN)
 option_with_deps(XRT_MODULE_COMPOSITOR_UTIL "Build compositor utility library" DEPENDS XRT_MODULE_COMPOSITOR XRT_HAVE_VULKAN)
 option_with_deps(XRT_MODULE_COMPOSITOR_MOCK "Build mock compositor library" DEPENDS XRT_MODULE_COMPOSITOR)
 option_with_deps(XRT_MODULE_MERCURY_HANDTRACKING "Enable Mercury hand tracking" DEPENDS XRT_HAVE_OPENCV XRT_HAVE_ONNXRUNTIME)

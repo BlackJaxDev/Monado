@@ -6,7 +6,7 @@
  * @brief  The NEW compositor rendering code header.
  * @author Lubosz Sarnecki <lubosz.sarnecki@collabora.com>
  * @author Jakob Bornecrantz <jakob@collabora.com>
- * @ingroup comp_render
+ * @ingroup aux_render
  */
 
 #pragma once
@@ -26,14 +26,14 @@ extern "C" {
 
 
 /*!
- * @defgroup comp_render Compositor render code
+ * @defgroup aux_render Compositor render code
  * @ingroup comp
  *
  * @brief Rendering helper that is used by the compositor to render.
  */
 
 /*!
- * @addtogroup comp_render
+ * @addtogroup aux_render
  * @{
  */
 
