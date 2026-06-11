@@ -28,6 +28,7 @@ VRClientCoreFactory(const char *pInterfaceName, int *pReturnCode)
 		return &clientCore;
 	}
 
+	*pReturnCode = static_cast<int>(vr::VRInitError_Init_InterfaceNotFound);
 	return NULL;
 }
 
