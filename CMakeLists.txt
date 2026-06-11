@@ -382,6 +382,7 @@ option(XRT_BUILD_SAMPLES "Enable compiling sample code implementations that will
 set(XRT_IPC_MSG_SOCK_FILENAME monado_comp_ipc CACHE STRING "Service socket filename")
 set(XRT_IPC_SERVICE_PID_FILENAME monado.pid CACHE STRING "Service pidfile filename")
 set(XRT_OXR_RUNTIME_SUFFIX monado CACHE STRING "OpenXR client library suffix")
+set(XRT_OPENVR_STATE_TRACKER_INSTALL_DIR "share" CACHE STRING "Install the OpenVR state tracker to this directory root.")
 
 # Most users won't touch these.
 mark_as_advanced(XRT_MODULE_COMPOSITOR_MAIN XRT_MODULE_COMPOSITOR_NULL XRT_FEATURE_OPENXR)

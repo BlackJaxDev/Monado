@@ -61,14 +61,24 @@ if(XRT_FEATURE_CLIENT_DEBUG_GUI)
 	target_link_libraries(openvr PRIVATE aux_util_debug_gui)
 endif()
 
+set_target_properties(openvr PROPERTIES OUTPUT_NAME "vrclient")
+# Some random platforms don't use the platform subdir, but still have one defined.
+set(OPENVR_USE_PLATFORM_SUBDIR ON)
+
 # https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/samples/shared/pathtools.h#L109
 if(APPLE)
 	set(OPENVR_TARGET_SUFFIX ".dylib")
 	set(OPENVR_PLATFORM_SUBDIR "osx32")
 elseif(WIN32)
+	# https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/src/openvr_api_public.cpp#L130
+	set(OPENVR_USE_PLATFORM_SUBDIR OFF)
+
 	set(OPENVR_TARGET_SUFFIX ".dll")
 	if("${CMAKE_SIZEOF_VOID_P}" EQUAL "8")
 		set(OPENVR_PLATFORM_SUBDIR "win64")
+
+		# https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/src/openvr_api_public.cpp#L141
+		set_target_properties(openvr PROPERTIES OUTPUT_NAME "vrclient_x64")
 	else()
 		set(OPENVR_PLATFORM_SUBDIR "win32")
 	endif()
@@ -78,6 +88,9 @@ elseif(UNIX)
 		set(OPENVR_PLATFORM_SUBDIR "linux64")
 	else()
 		set(OPENVR_PLATFORM_SUBDIR "linux32")
+
+		# https://github.com/ValveSoftware/openvr/blob/0924064316de3effbcd1acf1e309182a2deb1c05/src/openvr_api_public.cpp#L130
+		set(OPENVR_USE_PLATFORM_SUBDIR OFF)
 	endif()
 else()
 	message(FATAL_ERROR "Unsupported platform")
@@ -85,10 +98,22 @@ endif()
 
 set_target_properties(openvr PROPERTIES PREFIX "")
 set_target_properties(openvr PROPERTIES SUFFIX "${OPENVR_TARGET_SUFFIX}")
-set_target_properties(openvr PROPERTIES OUTPUT_NAME "vrclient")
-set_target_properties(
-	openvr PROPERTIES LIBRARY_OUTPUT_DIRECTORY
-			  "${PROJECT_BINARY_DIR}/st-openvr/bin/${OPENVR_PLATFORM_SUBDIR}/"
-	)
+if(OPENVR_USE_PLATFORM_SUBDIR)
+	set_target_properties(
+		openvr PROPERTIES LIBRARY_OUTPUT_DIRECTORY
+				  "${PROJECT_BINARY_DIR}/st-openvr/bin/${OPENVR_PLATFORM_SUBDIR}/"
+		)
+else()
+	set_target_properties(
+		openvr PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/st-openvr/bin/"
+		)
+endif()
 
-install(DIRECTORY "${PROJECT_BINARY_DIR}/st-openvr" DESTINATION "${CMAKE_INSTALL_PREFIX}/share")
+# Copy the `version.txt` to st-openvr/bin/ so that Steam can find it
+# The version in this file is set to the same value as the version of SteamVR we're matching compatilibity with.
+install(FILES version.txt DESTINATION "${PROJECT_BINARY_DIR}/st-openvr/bin/")
+
+install(
+	DIRECTORY "${PROJECT_BINARY_DIR}/st-openvr"
+	DESTINATION "${CMAKE_INSTALL_PREFIX}/${XRT_OPENVR_STATE_TRACKER_INSTALL_DIR}"
+	)
