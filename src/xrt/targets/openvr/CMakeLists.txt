@@ -111,7 +111,7 @@ endif()
 
 # Copy the `version.txt` to st-openvr/bin/ so that Steam can find it
 # The version in this file is set to the same value as the version of SteamVR we're matching compatilibity with.
-install(FILES version.txt DESTINATION "${PROJECT_BINARY_DIR}/st-openvr/bin/")
+file(COPY version.txt DESTINATION "${PROJECT_BINARY_DIR}/st-openvr/bin/")
 
 install(
 	DIRECTORY "${PROJECT_BINARY_DIR}/st-openvr"
