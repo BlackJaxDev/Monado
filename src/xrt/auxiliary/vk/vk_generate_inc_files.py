@@ -320,6 +320,7 @@ DEVICE_EXTENSIONS_TO_CHECK = [
     "VK_KHR_maintenance2",
     "VK_KHR_maintenance3",
     "VK_KHR_maintenance4",
+    "VK_KHR_present_id2",
     "VK_KHR_present_wait",
     "VK_KHR_portability_subset",
     "VK_KHR_shared_presentable_image",

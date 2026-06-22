@@ -199,6 +199,12 @@ struct vk_bundle
 		//! Was synchronization2 requested, available, and enabled?
 		bool synchronization_2;
 
+		//! Was KHR_present_id requested, available, and enabled?
+		bool present_id;
+
+		//! Was KHR_present_id2 requested, available, and enabled?
+		bool present_id2;
+
 		//! Was KHR_present_wait requested, available, and enabled?
 		bool present_wait;
 
@@ -757,6 +763,8 @@ struct vk_device_features
 	bool synchronization_2;
 	bool ext_fmt_resolve;
 	bool storage_buffer_8bit_access;
+	bool present_id;
+	bool present_id2;
 	bool present_wait;
 	bool video_maintenance_1;
 };
