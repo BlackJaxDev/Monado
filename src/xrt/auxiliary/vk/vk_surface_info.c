@@ -118,7 +118,9 @@ vk_surface_info_fill_in(struct vk_bundle *vk, struct vk_surface_info *info, VkSu
 		VK_CHK_WITH_GOTO(ret, "vkGetPhysicalDeviceSurfaceCapabilities2KHR", error);
 
 		info->caps = surf_caps2.surfaceCapabilities;
+#ifdef VK_KHR_shared_presentable_image
 		info->shared_present_caps = shared_present_caps;
+#endif
 	}
 #endif
 
