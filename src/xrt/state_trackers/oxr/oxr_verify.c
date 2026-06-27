@@ -453,11 +453,11 @@ oxr_verify_action_sets_array(struct oxr_logger *log,
 			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u]) is XR_NULL_HANDLE", variable_name, i);
 		}
 		struct oxr_action_set *act_set = XRT_CAST_OXR_HANDLE_TO_PTR(struct oxr_action_set *, actionSets[i]);
-		if (act_set->handle.debug != OXR_XR_DEBUG_ACTIONSET) {
+		if (act_set->handle.base.debug != OXR_XR_DEBUG_ACTIONSET) {
 			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u]) is not a valid XrActionSet",
 			                 variable_name, i);
 		}
-		if (act_set->handle.state != OXR_HANDLE_STATE_LIVE) {
+		if (act_set->handle.base.state != OXR_HANDLE_STATE_LIVE) {
 			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u]) is not live", variable_name, i);
 		}
 	}
@@ -479,11 +479,11 @@ oxr_verify_active_action_sets_sync(struct oxr_logger *log,
 		}
 		struct oxr_action_set *act_set =
 		    XRT_CAST_OXR_HANDLE_TO_PTR(struct oxr_action_set *, activeActionSets[i].actionSet);
-		if (act_set->handle.debug != OXR_XR_DEBUG_ACTIONSET) {
+		if (act_set->handle.base.debug != OXR_XR_DEBUG_ACTIONSET) {
 			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u].actionSet) is not a valid XrActionSet",
 			                 variable_name, i);
 		}
-		if (act_set->handle.state != OXR_HANDLE_STATE_LIVE) {
+		if (act_set->handle.base.state != OXR_HANDLE_STATE_LIVE) {
 			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u].actionSet) is not live", variable_name,
 			                 i);
 		}

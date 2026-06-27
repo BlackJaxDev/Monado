@@ -378,7 +378,8 @@ oxr_action_set_create(struct oxr_logger *log,
 	int h_ret;
 
 	struct oxr_action_set *act_set = NULL;
-	OXR_ALLOCATE_HANDLE_OR_RETURN(log, act_set, OXR_XR_DEBUG_ACTIONSET, oxr_action_set_destroy_cb, &inst->handle);
+	OXR_ALLOCATE_HANDLE_PARENT_OR_RETURN(log, act_set, OXR_XR_DEBUG_ACTIONSET, oxr_action_set_destroy_cb,
+	                                     &inst->handle);
 
 	act_set->inst_context = NULL;
 
@@ -395,7 +396,7 @@ oxr_action_set_create(struct oxr_logger *log,
 
 	ret = oxr_pair_hashset_init(log, &act_set_ref->actions);
 	if (ret != XR_SUCCESS) {
-		oxr_handle_destroy(log, &act_set->handle);
+		oxr_handle_parent_destroy(log, &act_set->handle);
 		return ret;
 	}
 
@@ -408,7 +409,7 @@ oxr_action_set_create(struct oxr_logger *log,
 	    &act_set->name_item,                //
 	    &act_set->loc_item);                //
 	if (h_ret != 0) {
-		oxr_handle_destroy(log, &act_set->handle);
+		oxr_handle_parent_destroy(log, &act_set->handle);
 		return oxr_error(log, XR_ERROR_RUNTIME_FAILURE, "Failed to insert action set name pair");
 	}
 

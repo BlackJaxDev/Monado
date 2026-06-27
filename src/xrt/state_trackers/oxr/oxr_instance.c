@@ -269,7 +269,7 @@ oxr_instance_create(struct oxr_logger *log,
 	xrt_result_t xret;
 	XrResult ret;
 
-	OXR_ALLOCATE_HANDLE_OR_RETURN(log, inst, OXR_XR_DEBUG_INSTANCE, oxr_instance_destroy, NULL);
+	OXR_ALLOCATE_HANDLE_PARENT_OR_RETURN(log, inst, OXR_XR_DEBUG_INSTANCE, oxr_instance_destroy, NULL);
 
 	inst->extensions = *extensions; // Sets the enabled extensions.
 	inst->openxr_version.major_minor = major_minor;
@@ -383,7 +383,7 @@ oxr_instance_create(struct oxr_logger *log,
 	xret = xrt_instance_create(&i_info, &inst->xinst);
 	if (xret != XRT_SUCCESS) {
 		ret = oxr_error(log, XR_ERROR_RUNTIME_UNAVAILABLE, "Failed to create instance '%i'", xret);
-		oxr_instance_destroy(log, &inst->handle);
+		oxr_instance_destroy(log, &inst->handle.base);
 		return ret;
 	}
 

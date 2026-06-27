@@ -1209,7 +1209,7 @@ oxr_session_allocate_and_init(struct oxr_logger *log,
 {
 	struct oxr_session *sess = NULL;
 	XrResult ret;
-	OXR_ALLOCATE_HANDLE_OR_RETURN(log, sess, OXR_XR_DEBUG_SESSION, oxr_session_destroy, &sys->inst->handle);
+	OXR_ALLOCATE_HANDLE_PARENT_OR_RETURN(log, sess, OXR_XR_DEBUG_SESSION, oxr_session_destroy, &sys->inst->handle);
 
 	// Needs to happen early due to mutex.
 	ret = oxr_session_attached_actions_init(&sess->attached_actions);
@@ -1550,7 +1550,7 @@ oxr_session_create(struct oxr_logger *log,
 	if (ret != XR_SUCCESS) {
 		if (sess != NULL) {
 			/* clean up allocation first */
-			XrResult cleanup_result = oxr_handle_destroy(log, &sess->handle);
+			XrResult cleanup_result = oxr_handle_parent_destroy(log, &sess->handle);
 			assert(cleanup_result == XR_SUCCESS);
 			(void)cleanup_result;
 		}
