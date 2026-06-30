@@ -81,10 +81,24 @@ create_implicit_render_pass(struct vk_bundle *vk,
 	    },
 	};
 
-	/*
-	 * We don't use any VkSubpassDependency structs, instead relying on the
-	 * implicit dependencies inserted by the runtime implementation.
+	/*!
+	 * Explicit subpass dependency required to synchronize the implicit layout
+	 * transition at render pass begin with the swapchain acquire semaphore, which
+	 * signals at VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT. Without this, the
+	 * implicit dependency is not enough and results in a SYNC-HAZARD-WRITE-AFTER-READ
+	 * (or WRITE-AFTER-WRITE with shared presentable images) validation errors.
 	 */
+	const VkSubpassDependency subpass_dependencies[1] = {
+	    {
+	        .srcSubpass = VK_SUBPASS_EXTERNAL,
+	        .dstSubpass = 0,
+	        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+	        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+	        .srcAccessMask = 0,
+	        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+	        .dependencyFlags = 0,
+	    },
+	};
 
 	VkRenderPassCreateInfo render_pass_info = {
 	    .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
@@ -92,8 +106,8 @@ create_implicit_render_pass(struct vk_bundle *vk,
 	    .pAttachments = attachments,
 	    .subpassCount = ARRAY_SIZE(subpasses),
 	    .pSubpasses = subpasses,
-	    .dependencyCount = 0,
-	    .pDependencies = NULL,
+	    .dependencyCount = ARRAY_SIZE(subpass_dependencies),
+	    .pDependencies = subpass_dependencies,
 	};
 
 	VkRenderPass render_pass = VK_NULL_HANDLE;
@@ -149,8 +163,7 @@ begin_render_pass(struct vk_bundle *vk,
                   VkCommandBuffer command_buffer,
                   VkRenderPass render_pass,
                   VkFramebuffer framebuffer,
-                  uint32_t width,
-                  uint32_t height,
+                  const VkRect2D *render_area,
                   const VkClearColorValue *color)
 {
 	VkClearValue clear_color[1] = {{
@@ -161,19 +174,7 @@ begin_render_pass(struct vk_bundle *vk,
 	    .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
 	    .renderPass = render_pass,
 	    .framebuffer = framebuffer,
-	    .renderArea =
-	        {
-	            .offset =
-	                {
-	                    .x = 0,
-	                    .y = 0,
-	                },
-	            .extent =
-	                {
-	                    .width = width,
-	                    .height = height,
-	                },
-	        },
+	    .renderArea = *render_area,
 	    .clearValueCount = ARRAY_SIZE(clear_color),
 	    .pClearValues = clear_color,
 	};
@@ -934,7 +935,10 @@ render_gfx_target_resources_init(struct render_gfx_target_resources *rtr,
 
 	// Set fields.
 	rtr->rgrp = rgrp;
-	rtr->extent = extent;
+	rtr->render_area = (VkRect2D){
+	    .offset = {0, 0},
+	    .extent = extent,
+	};
 
 	return true;
 }
@@ -1056,15 +1060,14 @@ render_gfx_begin_target(struct render_gfx *render,
 
 	VkRenderPass render_pass = rtr->rgrp->render_pass;
 	VkFramebuffer framebuffer = rtr->framebuffer;
-	VkExtent2D extent = rtr->extent;
+	const VkRect2D *render_area = &rtr->render_area;
 
 	begin_render_pass(  //
 	    vk,             //
 	    render->r->cmd, //
 	    render_pass,    //
 	    framebuffer,    //
-	    extent.width,   //
-	    extent.height,  //
+	    render_area,    //
 	    color);         //
 
 	return true;
@@ -1083,20 +1086,44 @@ render_gfx_end_target(struct render_gfx *render)
 }
 
 void
-render_gfx_begin_view(struct render_gfx *render, uint32_t view, const struct render_viewport_data *viewport_data)
+render_gfx_clear_color_attachment(struct render_gfx *render, const VkClearColorValue *color)
+{
+	struct vk_bundle *vk = vk_from_render(render);
+
+	assert(render->rtr != NULL);
+
+	const VkClearAttachment clear_attachment = {
+	    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+	    .colorAttachment = 0,
+	    .clearValue.color = *color,
+	};
+	const VkClearRect clear_rect = {
+	    .rect = render->rtr->render_area,
+	    .baseArrayLayer = 0,
+	    .layerCount = 1,
+	};
+	vk->vkCmdClearAttachments(render->r->cmd, 1, &clear_attachment, 1, &clear_rect);
+}
+
+void
+render_gfx_begin_view(struct render_gfx *render,
+                      uint32_t view,
+                      const struct render_viewport_data *viewport_data,
+                      const render_scissor_data_t *scissor_data)
 {
 	struct vk_bundle *vk = vk_from_render(render);
 
 	// We currently only support two views.
 	assert(view == 0 || view == 1);
 	assert(render->rtr != NULL);
-
+	assert(viewport_data != NULL);
+	assert(scissor_data != NULL);
 
 	/*
 	 * Viewport
 	 */
 
-	VkViewport viewport = {
+	const VkViewport viewport = {
 	    .x = (float)viewport_data->x,
 	    .y = (float)viewport_data->y,
 	    .width = (float)viewport_data->w,
@@ -1114,16 +1141,16 @@ render_gfx_begin_view(struct render_gfx *render, uint32_t view, const struct ren
 	 * Scissor
 	 */
 
-	VkRect2D scissor = {
+	const VkRect2D scissor = {
 	    .offset =
 	        {
-	            .x = viewport_data->x,
-	            .y = viewport_data->y,
+	            .x = scissor_data->x,
+	            .y = scissor_data->y,
 	        },
 	    .extent =
 	        {
-	            .width = viewport_data->w,
-	            .height = viewport_data->h,
+	            .width = scissor_data->w,
+	            .height = scissor_data->h,
 	        },
 	};
 

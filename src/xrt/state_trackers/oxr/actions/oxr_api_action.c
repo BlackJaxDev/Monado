@@ -75,7 +75,7 @@ process_dpad(struct oxr_logger *log,
 	}
 
 	struct oxr_action_set *act_set = XRT_CAST_OXR_HANDLE_TO_PTR(struct oxr_action_set *, dpad->actionSet);
-	if (act_set->handle.debug != OXR_XR_DEBUG_ACTIONSET) {
+	if (act_set->handle.base.debug != OXR_XR_DEBUG_ACTIONSET) {
 		return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s->actionSet == %p)", prefix, (void *)act_set);
 	}
 
@@ -601,7 +601,7 @@ oxr_xrDestroyActionSet(XrActionSet actionSet)
 	struct oxr_logger log;
 	OXR_VERIFY_ACTIONSET_AND_INIT_LOG(&log, actionSet, act_set, "xrDestroyActionSet");
 
-	return oxr_handle_destroy(&log, &act_set->handle);
+	return oxr_handle_parent_destroy(&log, &act_set->handle);
 }
 
 

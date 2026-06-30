@@ -1222,6 +1222,11 @@ comp_main_create_system_compositor(struct xrt_device *xdev,
 	sys_info->view_types[0] = c->view_configs[0].view_type;
 	c->view_config_count = sys_info->view_type_count = 1; // Only one view config for now.
 
+	if (c->settings.use_compute && // Only compute for now.
+	    view_type == XRT_VIEW_TYPE_STEREO) {
+		sys_info->supports_emulated_quad_views_with_inset = true;
+	}
+
 	// If we can add e.g. video pass-through capabilities, we may need to change (augment) this list.
 	// Just copying it directly right now.
 	assert(xdev->hmd->blend_mode_count <= XRT_MAX_DEVICE_BLEND_MODES);

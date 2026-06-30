@@ -645,8 +645,9 @@ select_k_leds_from_n(struct correspondence_search *cs,
 		return;
 	}
 
-	if (n > k)
+	if (n > k) {
 		select_k_leds_from_n(cs, mi, result_list, output_list, candidate_list + 1, k, n - 1, depth + 1);
+	}
 }
 
 /*

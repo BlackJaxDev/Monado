@@ -1,4 +1,4 @@
-// Copyright 2025, NVIDIA CORPORATION.
+// Copyright 2025-2026, NVIDIA CORPORATION.
 // SPDX-License-Identifier: BSL-1.0
 
 /*
@@ -18,5 +18,9 @@
 #define LAYER_COMP_TYPE_EQUIRECT2 3
 //! Maps to XRT_LAYER_PROJECTION[_DEPTH] (not numerically)
 #define LAYER_COMP_TYPE_PROJECTION 4
+//! Context (background) part of a split quad view projection layer.
+#define LAYER_COMP_TYPE_CONTEXT 5
+//! Inset part of a split quad view projection layer.
+#define LAYER_COMP_TYPE_INSET 6
 
 #endif // LAYER_DEFINES_INC_GLSL

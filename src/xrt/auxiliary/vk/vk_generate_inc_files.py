@@ -82,6 +82,7 @@ def get_device_cmds():
         Cmd("vkCmdBlitImage"),
         Cmd("vkCmdResolveImage"),
         Cmd("vkCmdPushConstants"),
+        Cmd("vkCmdClearAttachments"),
         Cmd("vkEndCommandBuffer"),
         Cmd("vkFreeCommandBuffers"),
         None,

@@ -453,11 +453,11 @@ oxr_verify_action_sets_array(struct oxr_logger *log,
 			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u]) is XR_NULL_HANDLE", variable_name, i);
 		}
 		struct oxr_action_set *act_set = XRT_CAST_OXR_HANDLE_TO_PTR(struct oxr_action_set *, actionSets[i]);
-		if (act_set->handle.debug != OXR_XR_DEBUG_ACTIONSET) {
+		if (act_set->handle.base.debug != OXR_XR_DEBUG_ACTIONSET) {
 			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u]) is not a valid XrActionSet",
 			                 variable_name, i);
 		}
-		if (act_set->handle.state != OXR_HANDLE_STATE_LIVE) {
+		if (act_set->handle.base.state != OXR_HANDLE_STATE_LIVE) {
 			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u]) is not live", variable_name, i);
 		}
 	}
@@ -479,11 +479,11 @@ oxr_verify_active_action_sets_sync(struct oxr_logger *log,
 		}
 		struct oxr_action_set *act_set =
 		    XRT_CAST_OXR_HANDLE_TO_PTR(struct oxr_action_set *, activeActionSets[i].actionSet);
-		if (act_set->handle.debug != OXR_XR_DEBUG_ACTIONSET) {
+		if (act_set->handle.base.debug != OXR_XR_DEBUG_ACTIONSET) {
 			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u].actionSet) is not a valid XrActionSet",
 			                 variable_name, i);
 		}
-		if (act_set->handle.state != OXR_HANDLE_STATE_LIVE) {
+		if (act_set->handle.base.state != OXR_HANDLE_STATE_LIVE) {
 			return oxr_error(log, XR_ERROR_HANDLE_INVALID, "(%s[%u].actionSet) is not live", variable_name,
 			                 i);
 		}
@@ -515,6 +515,12 @@ oxr_verify_view_config_type(struct oxr_logger *log,
 			return XR_SUCCESS;
 		}
 	}
+
+#if defined(OXR_HAVE_VARJO_quad_views)
+	if (inst->extensions.VARJO_quad_views && view_conf == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_QUAD_VARJO) {
+		return XR_SUCCESS;
+	}
+#endif
 
 	return oxr_error(log, XR_ERROR_VALIDATION_FAILURE, "(%s == 0x%08x) invalid view configuration type",
 	                 view_conf_name, view_conf);

@@ -574,8 +574,8 @@ Camera::PushPose(CameraSample &camera_sample,
 
 	// Try to optimize the pose
 	if (optimize) {
-		int num_leds_out;
-		int num_inliers;
+		uint32_t num_leds_out;
+		uint32_t num_inliers;
 		if (!ransac_pnp_pose(tracker->log_level, &Tcv_cam_device, camera_sample.blobs, camera_sample.blob_count,
 		                     &device->params.led_model, device->id, &this->model, &num_leds_out,
 		                     &num_inliers)) {

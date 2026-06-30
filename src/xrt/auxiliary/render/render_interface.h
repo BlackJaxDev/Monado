@@ -674,6 +674,7 @@ struct render_viewport_data
 	uint32_t w, h;
 };
 
+typedef struct render_viewport_data render_scissor_data_t;
 
 /*
  *
@@ -774,8 +775,8 @@ struct render_gfx_target_resources
 	//! Render pass.
 	struct render_gfx_render_pass *rgrp;
 
-	// The extent of the framebuffer.
-	VkExtent2D extent;
+	//! The offset & extents of the framebuffer.
+	VkRect2D render_area;
 
 	//! Framebuffer for this target, depends on given VkImageView.
 	VkFramebuffer framebuffer;
@@ -893,7 +894,8 @@ struct render_gfx_mesh_ubo_data
 
 	// Only used for timewarp.
 	struct xrt_normalized_rect pre_transform;
-	struct xrt_matrix_4x4 transform;
+	struct xrt_matrix_4x4 transform_scanout_begin;
+	struct xrt_matrix_4x4 transform_scanout_end;
 };
 
 /*!
@@ -1070,7 +1072,17 @@ render_gfx_end_target(struct render_gfx *render);
  * @public @memberof render_gfx
  */
 void
-render_gfx_begin_view(struct render_gfx *render, uint32_t view, const struct render_viewport_data *viewport_data);
+render_gfx_clear_color_attachment(struct render_gfx *render, const VkClearColorValue *color);
+
+/*!
+ * @pre successful @ref render_gfx_begin_target call
+ * @public @memberof render_gfx
+ */
+void
+render_gfx_begin_view(struct render_gfx *render,
+                      uint32_t view,
+                      const struct render_viewport_data *viewport_data,
+                      const render_scissor_data_t *scissor_data);
 
 /*!
  * @pre successful @ref render_gfx_begin_view call without a matching call to this function

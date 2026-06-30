@@ -83,7 +83,7 @@ To build Monado from a Gitlab Windows Shell Worker, some configurations are need
 
 - set `MSYSTEM=CLANG64` in the system envvars (this must be set prior to the execution of the shell worker, hence the use of a system-wide envvar)
 
-- in the runner's congif.toml, set:
+- in the runner's config.toml, set:
 
   ```
   [[runners]]

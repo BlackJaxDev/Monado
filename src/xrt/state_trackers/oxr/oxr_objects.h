@@ -160,29 +160,6 @@ xr_action_type_to_str(XrActionType type)
 	// clang-format on
 }
 
-/*
- *
- * oxr_handle_base.c
- *
- */
-
-/*!
- * Destroy the handle's object, as well as all child handles recursively.
- *
- * This should be how all handle-associated objects are destroyed.
- *
- * @public @memberof oxr_handle_base
- */
-XrResult
-oxr_handle_destroy(struct oxr_logger *log, struct oxr_handle_base *hb);
-
-/*!
- * Returns a human-readable label for a handle state.
- *
- * @relates oxr_handle_base
- */
-const char *
-oxr_handle_state_to_string(enum oxr_handle_state state);
 
 /*!
  *
@@ -1129,7 +1106,7 @@ struct oxr_system
 	XrReferenceSpaceType reference_spaces[5];
 	uint32_t reference_space_count;
 
-	struct xrt_visibility_mask *visibility_mask[2];
+	struct xrt_visibility_mask *visibility_mask[XRT_MAX_COMPOSITOR_VIEW_CONFIGS_VIEW_COUNT];
 
 #ifdef OXR_HAVE_MNDX_xdev_space
 	bool supports_xdev_space;
@@ -1195,7 +1172,7 @@ struct oxr_extension_status
 struct oxr_instance
 {
 	//! Common structure for things referred to by OpenXR handles.
-	struct oxr_handle_base handle;
+	struct oxr_handle_parent_base handle;
 
 	struct u_debug_gui *debug_ui;
 
@@ -1275,6 +1252,12 @@ struct oxr_instance
 		 */
 		bool disable_vulkan_format_depth_stencil;
 
+		/*!
+		 * Disable the listing of quad views as a supported view config,
+		 * the extensions are still exposed.
+		 */
+		bool disable_quad_views;
+
 		//! Unreal 4 has a bug calling xrEndSession; the function should just exit
 		bool skip_end_session;
 
@@ -1342,7 +1325,7 @@ struct oxr_instance
 struct oxr_session
 {
 	//! Common structure for things referred to by OpenXR handles.
-	struct oxr_handle_base handle;
+	struct oxr_handle_parent_base handle;
 	struct oxr_system *sys;
 
 	//! What graphics type was this session created with.
@@ -1916,7 +1899,7 @@ struct oxr_action_set_ref
 struct oxr_action_set
 {
 	//! Common structure for things referred to by OpenXR handles.
-	struct oxr_handle_base handle;
+	struct oxr_handle_parent_base handle;
 
 	//! Owner of this action set.
 	struct oxr_instance *inst;
@@ -2378,7 +2361,7 @@ XrResult
 oxr_future_create(struct oxr_logger *log,
                   struct oxr_session *sess,
                   struct xrt_future *xft,
-                  struct oxr_handle_base *parent_handle,
+                  struct oxr_handle_parent_base *parent_handle,
                   struct oxr_future_ext **out_oxr_future_ext);
 
 XrResult

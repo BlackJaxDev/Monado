@@ -1,5 +1,5 @@
 // Copyright 2021-2023, Collabora Ltd.
-// Copyright 2025, NVIDIA CORPORATION.
+// Copyright 2025-2026, NVIDIA CORPORATION.
 // Author: Jakob Bornecrantz <jakob@collabora.com>
 // Author: Christoph Haag <christoph.haag@collabora.com>
 // SPDX-License-Identifier: BSL-1.0
@@ -56,6 +56,8 @@ layout(constant_id = 2) const bool do_color_correction = true;
 
 //! This is always set by the render_resource pipeline creation code to the actual limit.
 layout(constant_id = 3) const int SAMPLER_ARRAY_SIZE = 16;
+
+layout(constant_id = 5) const float INSET_BLEND_EDGE = 0.05;
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -426,7 +428,7 @@ vec4 do_equirect2(vec2 view_uv, uint layer)
 	return out_color;
 }
 
-vec4 do_projection(vec2 view_uv, uint layer)
+vec4 do_projection_uv(vec2 view_uv, uint layer, out vec2 out_uv)
 {
 	uint source_image_index = LAYER.image_info.color_image_index;
 
@@ -436,7 +438,28 @@ vec4 do_projection(vec2 view_uv, uint layer)
 	// Sample the source.
 	vec4 colour = vec4(texture(source[source_image_index], uv).rgba);
 
+	out_uv = uv;
+
 	return colour;
+}
+
+vec4 do_projection_inset(vec2 view_uv, uint layer, out float out_inset_blend_factor)
+{
+	vec2 uv = vec2(0.0, 0.0);
+	vec4 colour = do_projection_uv(view_uv, layer, uv);
+
+	vec2 negative_edges = smoothstep(0, INSET_BLEND_EDGE, uv);
+	vec2 positive_edges = smoothstep(1.0, 1.0 - INSET_BLEND_EDGE, uv);
+	vec2 inset_blend_factor = min(negative_edges, positive_edges);
+	out_inset_blend_factor = min(inset_blend_factor.x, inset_blend_factor.y);
+
+	return colour;
+}
+
+vec4 do_projection(vec2 view_uv, uint layer)
+{
+	vec2 uv = vec2(0.5, 0.5);
+	return do_projection_uv(view_uv, layer, uv);
 }
 
 vec3 get_direction(vec2 uv)
@@ -550,6 +573,8 @@ vec4 do_layers(vec2 view_uv)
 		vec4 rgba = vec4(0, 0, 0, 0);
 
 		switch (LAYER.layer_data.layer_type) {
+		case LAYER_COMP_TYPE_NOOP:
+			continue;
 		case LAYER_COMP_TYPE_QUAD:
 			rgba = do_quad(view_uv, layer);
 			// Quad alpha inversion is done inside
@@ -565,6 +590,22 @@ vec4 do_layers(vec2 view_uv)
 		case LAYER_COMP_TYPE_PROJECTION:
 			rgba = do_projection(view_uv, layer);
 			rgba.a = invert_alpha(rgba.a, layer);
+			rgba = apply_chroma_key(rgba, layer);
+			break;
+		case LAYER_COMP_TYPE_CONTEXT:
+			// The second layer is the inset, which handles both.
+			continue;
+		case LAYER_COMP_TYPE_INSET:
+			float inset_blend_factor = 0.0;
+			vec4 context_rgba = do_projection(view_uv, layer - 1);
+			vec4 inset_rgba = do_projection_inset(view_uv, layer, inset_blend_factor);
+
+			/*
+			 * We handle this here so that any additional effects
+			 * are applied after the two "layers" are blended,
+			 * so the quad views layer is treated as one layer.
+			 */
+			rgba = mix(context_rgba, inset_rgba, inset_blend_factor);
 			rgba = apply_chroma_key(rgba, layer);
 			break;
 		default: break;

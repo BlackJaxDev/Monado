@@ -1360,6 +1360,7 @@ submit_projection_layer(struct oxr_session *sess,
                         struct oxr_logger *log,
                         XrCompositionLayerProjection *proj,
                         struct xrt_device *head,
+                        enum xrt_layer_composition_flags extra_flags,
                         uint64_t oxr_timestamp,
                         uint64_t xrt_timestamp)
 {
@@ -1377,10 +1378,14 @@ submit_projection_layer(struct oxr_session *sess,
 	const bool d_scs_valid = false;
 #endif // OXR_HAVE_KHR_composition_layer_depth
 
+	// From app flags.
 	enum xrt_layer_composition_flags flags = convert_layer_flags(sess, proj->layerFlags);
 	if (sess->sys->inst->quirks.no_texture_source_alpha) {
 		flags &= ~XRT_LAYER_COMPOSITION_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
 	}
+
+	// One use of the extra_flags is quad view emulation.
+	flags |= extra_flags;
 
 	for (uint32_t i = 0; i < proj->viewCount; i++) {
 		scs[i] = XRT_CAST_OXR_HANDLE_TO_PTR(struct oxr_swapchain *, proj->views[i].subImage.swapchain);
@@ -1705,6 +1710,58 @@ submit_passthrough_layer(struct oxr_session *sess,
 	return XR_SUCCESS;
 }
 
+static XrResult
+submit_4x_proj_emulation(struct oxr_session *sess,
+                         struct xrt_compositor *xc,
+                         struct oxr_logger *log,
+                         XrCompositionLayerProjection *proj,
+                         struct xrt_device *head,
+                         uint64_t oxr_timestamp,
+                         uint64_t xrt_timestamp)
+{
+	const enum xrt_layer_composition_flags context_extra_flags = XRT_LAYER_SPLIT_QUAD_VIEW_CONTEXT;
+	const enum xrt_layer_composition_flags inset_extra_flags = XRT_LAYER_SPLIT_QUAD_VIEW_INSET;
+	XrResult result = XR_SUCCESS;
+
+	XrCompositionLayerProjection context = *proj;
+	context.next = NULL; // Can't handle this well.
+	context.viewCount = 2;
+	context.views = proj->views;
+
+	XrCompositionLayerProjection inset = *proj;
+	inset.next = NULL; // Can't handle this well.
+	inset.viewCount = 2;
+	inset.views = &proj->views[2];
+
+	result = submit_projection_layer( //
+	    sess,                         //
+	    xc,                           //
+	    log,                          //
+	    &context,                     //
+	    head,                         //
+	    context_extra_flags,          //
+	    oxr_timestamp,                //
+	    xrt_timestamp);               //
+	if (result != XR_SUCCESS) {
+		return oxr_error(log, result, "Call submit_projection_layer(context) failed");
+	}
+
+	result = submit_projection_layer( //
+	    sess,                         //
+	    xc,                           //
+	    log,                          //
+	    &inset,                       //
+	    head,                         //
+	    inset_extra_flags,            //
+	    oxr_timestamp,                //
+	    xrt_timestamp);               //
+	if (result != XR_SUCCESS) {
+		return oxr_error(log, result, "Call submit_projection_layer(inset) failed");
+	}
+
+	return result;
+}
+
 XrResult
 oxr_session_frame_end(struct oxr_logger *log, struct oxr_session *sess, const XrFrameEndInfo *frameEndInfo)
 {
@@ -1879,10 +1936,31 @@ oxr_session_frame_end(struct oxr_logger *log, struct oxr_session *sess, const Xr
 		assert(layer != NULL);
 
 		switch (layer->type) {
-		case XR_TYPE_COMPOSITION_LAYER_PROJECTION:
-			submit_projection_layer(sess, xc, log, (XrCompositionLayerProjection *)layer, xdev,
-			                        frameEndInfo->displayTime, xrt_display_time_ns);
+		case XR_TYPE_COMPOSITION_LAYER_PROJECTION: {
+			XrCompositionLayerProjection *proj_layer = (XrCompositionLayerProjection *)layer;
+			if (proj_layer->viewCount == 4) {
+				// emulate 4x projection layer
+				submit_4x_proj_emulation(      //
+				    sess,                      //
+				    xc,                        //
+				    log,                       //
+				    proj_layer,                //
+				    xdev,                      //
+				    frameEndInfo->displayTime, //
+				    xrt_display_time_ns);      //
+			} else {
+				submit_projection_layer(       //
+				    sess,                      //
+				    xc,                        //
+				    log,                       //
+				    proj_layer,                //
+				    xdev,                      //
+				    0,                         // extra_flags
+				    frameEndInfo->displayTime, //
+				    xrt_display_time_ns);      //
+			}
 			break;
+		}
 		case XR_TYPE_COMPOSITION_LAYER_QUAD:
 			submit_quad_layer(sess, xc, log, (XrCompositionLayerQuad *)layer, xdev,
 			                  frameEndInfo->displayTime, xrt_display_time_ns);

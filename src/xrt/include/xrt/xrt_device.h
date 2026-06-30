@@ -298,6 +298,13 @@ struct xrt_device_supported
 
 	bool planes;
 	enum xrt_plane_detection_capability_flags_ext plane_capability_flags;
+
+	/*!
+	 * The device itself only has 2 views but is aware of quad views, has
+	 * better knowledge of which fovs to use for quad views to stereo views
+	 * emulation. So it supports retrieving quad views from get_views.
+	 */
+	bool get_views_quad;
 };
 
 /*!

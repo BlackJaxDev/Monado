@@ -90,6 +90,8 @@ add_library(
 	u_prober.h
 	u_resampler.c
 	u_resampler.h
+	u_str_to_enum.c
+	u_str_to_enum.h
 	u_extension_list.cpp
 	u_extension_list.h
 	u_extension_list.hpp
@@ -132,7 +134,6 @@ target_link_libraries(
 		xrt-external-metrics
 		xrt-external-bcdec
 		aux-includes
-		aux_generated_bindings_helpers
 		aux_os
 		aux_math
 	)

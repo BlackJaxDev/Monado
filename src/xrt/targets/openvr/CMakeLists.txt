@@ -1,5 +1,5 @@
 # Copyright 2019, Collabora, Ltd.
-# Copyright 2025, NVIDIA CORPORATION.
+# Copyright 2025-2026, NVIDIA CORPORATION.
 # Copyright 2026, Beyley Cardellio
 # SPDX-License-Identifier: BSL-1.0
 
@@ -112,7 +112,7 @@ else()
 endif()
 
 # Copy the `version.txt` to st-openvr/bin/ so that Steam can find it
-# The version in this file is set to the same value as the version of SteamVR we're matching compatilibity with.
+# The version in this file is set to the same value as the version of SteamVR we're matching compatibility with.
 file(COPY version.txt DESTINATION "${PROJECT_BINARY_DIR}/st-openvr/bin/")
 
 install(

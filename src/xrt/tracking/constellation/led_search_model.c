@@ -104,8 +104,9 @@ t_constellation_search_led_candidate_new(struct t_constellation_tracker_led *led
 			continue;
 		}
 
-		// Normals are more than 90 degrees apart - these are mutually exclusive LEDs
-		if (m_vec3_dot(led->normal, cur->normal) <= 0) {
+		// Normals are more apart than the sum of the visibility angles of the LEDs
+		float angle_between_leds_rad = acosf(m_vec3_dot(led->normal, cur->normal));
+		if (angle_between_leds_rad > (led->visibility_angle + cur->visibility_angle)) {
 			continue;
 		}
 
