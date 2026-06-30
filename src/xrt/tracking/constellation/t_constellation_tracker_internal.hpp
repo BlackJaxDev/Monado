@@ -87,6 +87,12 @@ struct ConstellationTracker;
 struct DataRecorder;
 struct Device;
 
+struct FoundDevicePose
+{
+	xrt_pose Tcv_cam_device XRT_POSE_IDENTITY;
+	float average_blob_brightness;
+};
+
 struct DeviceState
 {
 	//! The ID of the device.
@@ -96,7 +102,7 @@ struct DeviceState
 	std::optional<xrt_pose> Txr_world_device_prior{std::nullopt};
 
 	//! The final found pose of the device in this specific sample.
-	std::optional<xrt_pose> Tcv_cam_device_found{std::nullopt};
+	std::optional<FoundDevicePose> found_pose{std::nullopt};
 
 	//! Whether the device needs to have the slow processing thread run over it
 	bool needs_slow_processing{false};
@@ -123,6 +129,9 @@ public: // Fields
 public: // Methods
 	std::optional<DeviceState *>
 	GetDeviceState(t_constellation_device_id_t device_id);
+
+	DeviceState &
+	PutDeviceState(t_constellation_device_id_t device_id);
 
 	CameraSample(t_blob_observation &blobservation, Camera *camera);
 
@@ -264,6 +273,7 @@ public: // Methods (t_constellation_tracker.cpp)
 	bool
 	TryDevicePose(std::unique_ptr<Device> &device,
 	              CameraSample &sample,
+	              DeviceState &device_state,
 	              xrt_pose &Tcv_cam_world,
 	              std::optional<xrt_pose> &Tcv_world_device_prior,
 	              xrt_pose &Tcv_world_device_candidate,
@@ -272,6 +282,7 @@ public: // Methods (t_constellation_tracker.cpp)
 	bool
 	TryDeviceBlobRecovery(std::unique_ptr<Device> &device,
 	                      CameraSample &sample,
+	                      DeviceState &device_state,
 	                      xrt_pose &Tcv_cam_world,
 	                      std::optional<xrt_pose> &Tcv_world_device_prior,
 	                      xrt_pose &Tcv_cam_device_found);
@@ -284,7 +295,8 @@ public: // Methods (t_constellation_tracker.cpp)
 	FastSampleProcess(CameraSample &sample);
 
 	void
-	PushPose(CameraSample &sample,
+	PushPose(CameraSample &camera_sample,
+	         DeviceState &device_state,
 	         std::unique_ptr<Device> &device,
 	         pose_metrics &score,
 	         xrt_pose &Tcv_cam_device,

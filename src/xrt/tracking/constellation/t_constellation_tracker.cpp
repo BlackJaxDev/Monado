@@ -67,6 +67,23 @@ CameraSample::GetDeviceState(t_constellation_device_id_t device_id)
 	return std::nullopt;
 }
 
+DeviceState &
+CameraSample::PutDeviceState(t_constellation_device_id_t device_id)
+{
+	assert(this->device_count < XRT_CONSTELLATION_MAX_DEVICES);
+
+	DeviceState &new_device_state = this->device_states[this->device_count++];
+	new_device_state = {
+	    .device_id = device_id,
+	    .Txr_world_device_prior = std::nullopt,
+	    .found_pose = std::nullopt,
+	    .needs_slow_processing = false,
+	};
+
+	return new_device_state;
+}
+
+
 CameraSample::CameraSample(t_blob_observation &blobservation, Camera *camera)
 {
 	// Copy the blob observation into this sample, since we need the data to be safe.
@@ -249,6 +266,7 @@ Camera::DeferSampleToSlowThread(CameraSample &sample)
 bool
 Camera::TryDevicePose(std::unique_ptr<Device> &device,
                       CameraSample &sample,
+                      DeviceState &device_state,
                       xrt_pose &Tcv_cam_world,
                       std::optional<xrt_pose> &Tcv_world_device_prior,
                       xrt_pose &Tcv_world_device_candidate,
@@ -273,7 +291,7 @@ Camera::TryDevicePose(std::unique_ptr<Device> &device,
 
 
 	if (POSE_HAS_FLAGS(&score, POSE_MATCH_GOOD | POSE_MATCH_LED_IDS)) {
-		this->PushPose(sample, device, score, Tcv_cam_device_candidate, true);
+		this->PushPose(sample, device_state, device, score, Tcv_cam_device_candidate, true);
 		Tcv_cam_device_found = Tcv_cam_device_candidate;
 		return true;
 	}
@@ -284,6 +302,7 @@ Camera::TryDevicePose(std::unique_ptr<Device> &device,
 bool
 Camera::TryDeviceBlobRecovery(std::unique_ptr<Device> &device,
                               CameraSample &sample,
+                              DeviceState &device_state,
                               xrt_pose &Tcv_cam_world,
                               std::optional<xrt_pose> &Tcv_world_device_prior,
                               xrt_pose &Tcv_cam_device_found)
@@ -338,7 +357,7 @@ Camera::TryDeviceBlobRecovery(std::unique_ptr<Device> &device,
 	if (POSE_HAS_FLAGS(&score, POSE_MATCH_GOOD)) {
 		CT_DEBUG(tracker, "Camera %p RANSAC-PnP recovered pose for device %d from %u blobs", (void *)this,
 		         device->id, sample.blob_count);
-		this->PushPose(sample, device, score, Tcv_cam_device, false);
+		this->PushPose(sample, device_state, device, score, Tcv_cam_device, false);
 		Tcv_cam_device_found = Tcv_cam_device;
 
 		return true;
@@ -373,27 +392,33 @@ Camera::SlowSampleProcess(CameraSample &sample)
 		correspondence_search_flags search_flags =
 		    (correspondence_search_flags)(CS_FLAG_STOP_FOR_STRONG_MATCH | CS_FLAG_DEEP_SEARCH);
 
+		auto device_state = sample.GetDeviceState(device->id).value_or(nullptr);
+		// If there was no device state in the sample, that means this device appeared after the constellation
+		// tracker started this sample, so we need to fill out the device state here.
+		if (device_state == nullptr) {
+			device_state = &sample.PutDeviceState(device->id);
+
+			// we need to do a slow process for this device since it wasn't present in the fast processing
+			device_state->needs_slow_processing = true;
+		}
+
+		if (!device_state->needs_slow_processing) {
+			continue; // we already did a fast process for this device and it succeeded, no need to
+			          // do a slow one
+		}
+
 		xrt_pose Tcv_cam_device = XRT_POSE_IDENTITY;
-		auto maybe_device_state = sample.GetDeviceState(device->id);
-		if (maybe_device_state.has_value()) {
-			auto device_state = *maybe_device_state;
-			if (!device_state->needs_slow_processing) {
-				continue; // we already did a fast process for this device and it succeeded, no need to
-				          // do a slow one
-			}
+		if (device_state->Txr_world_device_prior.has_value() && Txr_world_cam.has_value()) {
+			xrt_pose Txr_cam_world;
+			math_pose_invert(&Txr_world_cam.value(), &Txr_cam_world);
 
-			if (device_state->Txr_world_device_prior.has_value() && Txr_world_cam.has_value()) {
-				xrt_pose Txr_cam_world;
-				math_pose_invert(&Txr_world_cam.value(), &Txr_cam_world);
+			xrt_pose Txr_cam_device;
+			math_pose_transform(&Txr_cam_world, &device_state->Txr_world_device_prior.value(),
+			                    &Txr_cam_device);
 
-				xrt_pose Txr_cam_device;
-				math_pose_transform(&Txr_cam_world, &device_state->Txr_world_device_prior.value(),
-				                    &Txr_cam_device);
+			math_pose_convert_opencv(&Txr_cam_device, &Tcv_cam_device);
 
-				math_pose_convert_opencv(&Txr_cam_device, &Tcv_cam_device);
-
-				search_flags = (correspondence_search_flags)(search_flags | CS_FLAG_HAVE_POSE_PRIOR);
-			}
+			search_flags = (correspondence_search_flags)(search_flags | CS_FLAG_HAVE_POSE_PRIOR);
 		}
 
 		// Arbitrary threshold to prevent trusting a gravity vector if the device itself isn't confident in it's
@@ -429,17 +454,21 @@ Camera::SlowSampleProcess(CameraSample &sample)
 		    device->gravity_error_rad,                         //
 		    &score);                                           //
 		if (found_pose) {
-			this->PushPose(sample, device, score, Tcv_cam_device, true);
+			this->PushPose(sample, *device_state, device, score, Tcv_cam_device, true);
 
 			// We found a pose for this device in this sample
-			if (maybe_device_state.has_value()) {
-				maybe_device_state.value()->needs_slow_processing = false;
-				maybe_device_state.value()->Tcv_cam_device_found = Tcv_cam_device;
-			}
+			device_state->needs_slow_processing = false;
 		}
 	}
 
 	this->DebugScribbleSample(sample, false);
+
+#ifdef XRT_FEATURE_RERUN
+	// If a slow sample was triggered by the fast processing thread, we always want to log the sample.
+	if (tracker->rerun_stream) {
+		tracker->rerun_stream->LogSample(*tracker, sample);
+	}
+#endif
 }
 
 bool
@@ -467,7 +496,7 @@ Camera::FastSampleProcess(CameraSample &sample)
 	xrt_pose Tcv_cam_world;
 	math_pose_invert(&Tcv_world_cam, &Tcv_cam_world);
 
-	bool need_full_search = false;
+	bool need_slow_search = false;
 	std::shared_lock lock(tracker->device_lock);
 	for (std::unique_ptr<Device> &device : tracker->devices) {
 		xrt_space_relation device_predicted_relation = XRT_SPACE_RELATION_ZERO; //< AKA "the prior"
@@ -487,23 +516,18 @@ Camera::FastSampleProcess(CameraSample &sample)
 			math_pose_convert_opencv(&device_predicted_relation.pose, &Tcv_world_device_predicted.value());
 		}
 
-		auto &device_state = sample.device_states[sample.device_count++] = {
-		    .device_id = device->id,
-		    .Txr_world_device_prior = Tcv_world_device_predicted.has_value()
-		                                  ? std::optional<xrt_pose>(device_predicted_relation.pose)
-		                                  : std::nullopt,
-		    .needs_slow_processing = false,
-		};
+		auto &device_state = sample.PutDeviceState(device->id);
+		device_state.Txr_world_device_prior = Tcv_world_device_predicted.has_value()
+		                                          ? std::optional<xrt_pose>(device_predicted_relation.pose)
+		                                          : std::nullopt;
 
 		xrt_pose Tcv_cam_device_found;
 
 		// if we have a valid prior pose, try to use it for fast matching
 		if (Tcv_world_device_predicted.has_value() &&
-		    this->TryDevicePose(device, sample, Tcv_cam_world, Tcv_world_device_predicted,
+		    this->TryDevicePose(device, sample, device_state, Tcv_cam_world, Tcv_world_device_predicted,
 		                        Tcv_world_device_predicted.value(), Tcv_cam_device_found)) {
 			CT_DEBUG(tracker, "Fast processing for device %d succeeded", device->id);
-			device_state.Tcv_cam_device_found = Tcv_cam_device_found;
-
 			continue; // try the next device, we found a pose!
 		}
 
@@ -520,25 +544,22 @@ Camera::FastSampleProcess(CameraSample &sample)
 			}
 		}
 
-		if (has_last_known && this->TryDevicePose(device, sample, Tcv_cam_world, Tcv_world_device_predicted,
-		                                          Tcv_world_device_last_known, Tcv_cam_device_found)) {
+		if (has_last_known &&
+		    this->TryDevicePose(device, sample, device_state, Tcv_cam_world, Tcv_world_device_predicted,
+		                        Tcv_world_device_last_known, Tcv_cam_device_found)) {
 			CT_DEBUG(tracker, "Fast processing for device %d succeeded with last known pose", device->id);
-			device_state.Tcv_cam_device_found = Tcv_cam_device_found;
-
 			continue; // try the next device, we found a pose!
 		}
 
-		if (this->TryDeviceBlobRecovery(device, sample, Tcv_cam_world, Tcv_world_device_predicted,
+		if (this->TryDeviceBlobRecovery(device, sample, device_state, Tcv_cam_world, Tcv_world_device_predicted,
 		                                Tcv_cam_device_found)) {
 			CT_DEBUG(tracker, "Fast processing for device %d succeeded with blob recovery", device->id);
-			device_state.Tcv_cam_device_found = Tcv_cam_device_found;
-
 			continue; // try the next device, we found a pose!
 		}
 
 		device_state.needs_slow_processing = true;
 
-		need_full_search = true;
+		need_slow_search = true;
 	}
 
 	this->DebugScribbleSample(sample, true);
@@ -549,16 +570,27 @@ Camera::FastSampleProcess(CameraSample &sample)
 		tracker->data_recorder->RecordSample(sample);
 	}
 
-	return need_full_search;
+#ifdef XRT_FEATURE_RERUN
+	// We only want to log this sample to rerun if we aren't about to do a full search
+	if (!need_slow_search && tracker->rerun_stream) {
+		tracker->rerun_stream->LogSample(*tracker, sample);
+	}
+#endif
+
+	return need_slow_search;
 }
 
 void
 Camera::PushPose(CameraSample &camera_sample,
+                 DeviceState &device_state,
                  std::unique_ptr<Device> &device,
                  pose_metrics &score,
                  xrt_pose &Tcv_cam_device,
                  bool optimize)
 {
+	// We should never find two poses for the same device in a single frame
+	assert(device_state.found_pose.has_value() == false);
+
 	ConstellationTracker *tracker = this->tracker;
 
 	{ // Match visible blobs to the pose we found
@@ -608,15 +640,6 @@ Camera::PushPose(CameraSample &camera_sample,
 	                      "Camera mosaic was destroyed while processing a sample, this should never happen since "
 	                      "the mosaic owns the camera");
 
-	auto Txr_world_cam = camera_sample.Txr_world_cam;
-	if (!Txr_world_cam.has_value()) {
-		// Can't do anything if we can't locate the camera in the world.
-		return;
-	}
-
-	xrt_pose Txr_world_device;
-	math_pose_transform(&Txr_world_cam.value(), &Txr_cam_device, &Txr_world_device);
-
 	float average_brightness = 0.0f;
 	uint32_t used_blobs = 0;
 	for (uint32_t i = 0; i < camera_sample.blob_count; i++) {
@@ -626,11 +649,27 @@ Camera::PushPose(CameraSample &camera_sample,
 			used_blobs++;
 		}
 	}
+
 	if (used_blobs > 0) {
 		average_brightness /= used_blobs;
 	} else {
 		average_brightness = 1.0f;
 	}
+
+	// Mark that we found a pose
+	device_state.found_pose = {
+	    .Tcv_cam_device = Tcv_cam_device,
+	    .average_blob_brightness = average_brightness,
+	};
+
+	auto Txr_world_cam = camera_sample.Txr_world_cam;
+	if (!Txr_world_cam.has_value()) {
+		// Can't do anything if we can't locate the camera in the world.
+		return;
+	}
+
+	xrt_pose Txr_world_device;
+	math_pose_transform(&Txr_world_cam.value(), &Txr_cam_device, &Txr_world_device);
 
 	// Push the sample to the device
 	t_constellation_tracker_sample sample = {
@@ -647,20 +686,6 @@ Camera::PushPose(CameraSample &camera_sample,
 
 		device->locked_data.Txr_world_device_last_known = Txr_world_device;
 	}
-
-#ifdef XRT_FEATURE_RERUN
-	if (tracker->rerun_stream) {
-		tracker->rerun_stream->LogTrackedFrame( //
-		    camera_sample,                      //
-		    device->id,                         //
-		    device->params.led_model,           //
-		    this->calibration,                  //
-		    Txr_world_cam.value(),              //
-		    Txr_cam_device,                     //
-		    Txr_world_device,                   //
-		    average_brightness);                //
-	}
-#endif
 
 	CT_DEBUG(tracker, "Found pose for device %d", device->id);
 }

@@ -60,15 +60,24 @@ ToRerunTransform(const xrt_pose &pose, bool from_parent = true)
 }
 
 rerun::components::Color
-ToBlobColor(float brightness, bool matched)
+MatchedBlobColor(t_constellation_device_id_t device_id, float brightness)
 {
-	float clamped = std::clamp(brightness, 0.0f, 1.0f);
-	uint8_t intensity = static_cast<uint8_t>(clamped * 255.0f);
-	if (matched) {
-		return rerun::components::Color(intensity / 4, intensity, 64, 255);
-	}
+	// Simple deterministic hash for device ID, ensuring device ID is non-zero
+	uint8_t r = (((device_id + 1) * 37) % 127) + 128;
+	uint8_t g = (((device_id + 1) * 57) % 127) + 128;
+	uint8_t b = (((device_id + 1) * 97) % 127) + 128;
 
-	return rerun::components::Color(intensity, intensity, intensity, 255);
+	return rerun::components::Color(r, g, b, static_cast<uint8_t>(255 * brightness));
+}
+
+rerun::components::Color
+UnmatchedBlobColor(float brightness)
+{
+	uint8_t r = 255;
+	uint8_t g = 255;
+	uint8_t b = 0;
+
+	return rerun::components::Color(r, g, b, static_cast<uint8_t>(255 * brightness));
 }
 
 rerun::Pinhole
@@ -106,12 +115,6 @@ GetCameraEntityName(size_t mosaic_idx, size_t camera_idx)
 }
 
 std::string
-GetDeviceEntityName(t_constellation_device_id_t device_id)
-{
-	return std::format("devices/{}", device_id);
-}
-
-std::string
 GetWorldEntityName()
 {
 	return "world";
@@ -142,19 +145,22 @@ GetCameraImageEntityName(size_t mosaic_idx, size_t camera_idx)
 }
 
 std::string
-GetWorldDeviceEntityName(t_constellation_device_id_t device_id)
-{
-	return std::format("{}/{}", GetWorldEntityName(), GetDeviceEntityName(device_id));
-}
-
-std::string
 GetCameraTrackedDeviceEntityName(const CameraSample &camera_sample, t_constellation_device_id_t device_id)
 {
 	return std::format("{}/tracked_devices/{}",
 	                   GetWorldCameraEntityName(camera_sample.mosaic_index, camera_sample.camera_index), device_id);
 }
 
-} // namespace
+std::string
+GetCameraTrackedDevicePoseEntityName(const CameraSample &camera_sample,
+                                     t_constellation_device_id_t device_id,
+                                     bool prior)
+{
+	return std::format("{}/{}", GetCameraTrackedDeviceEntityName(camera_sample, device_id),
+	                   prior ? "prior_pose" : "pose");
+}
+
+}; // namespace
 
 namespace xrt::tracking::constellation {
 
@@ -178,19 +184,25 @@ RerunContext::LogStaticScene(const CameraSample &camera_sample, const t_camera_c
 }
 
 void
-RerunContext::LogLedModel(const std::string &entity_name, const t_constellation_tracker_led_model &led_model)
+RerunContext::LogLedModel(const std::string &entity_name,
+                          t_constellation_device_id_t device_id,
+                          const t_constellation_tracker_led_model &led_model,
+                          bool prior)
 {
 	std::vector<rerun::Position3D> positions;
 	std::vector<rerun::Radius> radii;
+	std::vector<rerun::components::Color> colors;
 	std::vector<rerun::components::Text> labels;
 	positions.reserve(led_model.led_count);
 	radii.reserve(led_model.led_count);
+	colors.reserve(led_model.led_count);
 	labels.reserve(led_model.led_count);
 
 	for (size_t i = 0; i < led_model.led_count; i++) {
 		const t_constellation_tracker_led &led = led_model.leds[i];
 		positions.emplace_back(led.position.x, led.position.y, led.position.z);
 		radii.emplace_back(led.radius_m);
+		colors.emplace_back(MatchedBlobColor(device_id, prior ? 0.1f : 1.0f)); // Full brightness for LED model
 		labels.emplace_back(std::to_string(led.id));
 	}
 
@@ -199,16 +211,17 @@ RerunContext::LogLedModel(const std::string &entity_name, const t_constellation_
 	    entity_name + "/leds",     //
 	    rerun::Points3D(positions) //
 	        .with_radii(radii)     //
+	        .with_colors(colors)   //
 	        .with_labels(labels)   //
 	);                             //
 }
 
 void
-RerunContext::LogBlobSet(const std::string &entity_name,
-                         const CameraSample &camera_sample,
-                         t_constellation_device_id_t device_id,
-                         bool matched_only)
+RerunContext::LogBlobSet(const CameraSample &camera_sample)
 {
+	std::string camera_image_entity =
+	    GetCameraImageEntityName(camera_sample.mosaic_index, camera_sample.camera_index);
+
 	std::vector<rerun::Position2D> positions;
 	std::vector<rerun::Radius> radii;
 	std::vector<rerun::components::Color> colors;
@@ -220,18 +233,13 @@ RerunContext::LogBlobSet(const std::string &entity_name,
 
 	for (uint32_t i = 0; i < camera_sample.blob_count; i++) {
 		const t_blob &blob = camera_sample.blobs[i];
-		bool matched = blob.matched_device_id == device_id;
-		if (matched_only && !matched) {
-			continue;
-		}
-		if (!matched_only && matched) {
-			continue;
-		}
+		bool matched = (blob.matched_device_id != XRT_CONSTELLATION_INVALID_DEVICE_ID);
 
 		positions.emplace_back(blob.center.x, blob.center.y);
 		float radius = std::max(std::max(blob.size.x, blob.size.y) * 0.5f, BLOB_RADIUS_PIXELS);
 		radii.emplace_back(rerun::Radius::ui_points(radius));
-		colors.emplace_back(ToBlobColor(blob.brightness, matched));
+		colors.emplace_back(matched ? MatchedBlobColor(blob.matched_device_id, blob.brightness)
+		                            : UnmatchedBlobColor(blob.brightness));
 
 		if (matched) {
 			labels.emplace_back(std::format("LED {}", blob.matched_device_led_id));
@@ -240,37 +248,56 @@ RerunContext::LogBlobSet(const std::string &entity_name,
 		}
 	}
 
-	this->stream->log(             //
-	    entity_name,               //
-	    rerun::Points2D(positions) //
-	        .with_radii(radii)     //
-	        .with_colors(colors)   //
-	        .with_labels(labels)   //
-	);                             //
+	this->stream->log(                  //
+	    camera_image_entity + "/blobs", //
+	    rerun::Points2D(positions)      //
+	        .with_radii(radii)          //
+	        .with_colors(colors)        //
+	        .with_labels(labels)        //
+	);                                  //
 }
 
 void
-RerunContext::LogFrameMetrics(const CameraSample &camera_sample,
-                              t_constellation_device_id_t device_id,
-                              float brightness)
+RerunContext::LogFrameCameraMetrics(const CameraSample &camera_sample)
 {
+	float brightness = 0.0f;
+	for (uint32_t i = 0; i < camera_sample.blob_count; i++) {
+		brightness += camera_sample.blobs[i].brightness;
+	}
+	if (camera_sample.blob_count > 0) {
+		brightness /= static_cast<float>(camera_sample.blob_count);
+	} else {
+		brightness = 0.0f;
+	}
+
+	std::string camera_metrics =
+	    GetWorldCameraEntityName(camera_sample.mosaic_index, camera_sample.camera_index) + "/metrics";
+
+	this->stream->log(camera_metrics + "/brightness", rerun::Scalars(brightness));
+	this->stream->log(camera_metrics + "/blob_count", rerun::Scalars(static_cast<float>(camera_sample.blob_count)));
+}
+
+void
+RerunContext::LogFrameDeviceMetrics(const CameraSample &camera_sample, const DeviceState &device_state)
+{
+	if (!device_state.found_pose.has_value()) {
+		return;
+	}
+
+	auto &found_pose = device_state.found_pose.value();
+
 	uint32_t matched_blob_count = 0;
 	for (uint32_t i = 0; i < camera_sample.blob_count; i++) {
-		if (camera_sample.blobs[i].matched_device_id == device_id) {
+		if (camera_sample.blobs[i].matched_device_id == device_state.device_id) {
 			matched_blob_count++;
 		}
 	}
 
-	std::string device_metrics = GetWorldDeviceEntityName(device_id) + "/metrics";
-	std::string camera_metrics =
-	    GetWorldCameraEntityName(camera_sample.mosaic_index, camera_sample.camera_index) + "/metrics";
+	std::string device_metrics =
+	    std::format("{}/metrics", GetCameraTrackedDeviceEntityName(camera_sample, device_state.device_id));
 
-	this->stream->log(device_metrics + "/brightness", rerun::Scalars(brightness));
-	this->stream->log(device_metrics + "/matched_blob_count",
-	                  rerun::Scalars(static_cast<float>(matched_blob_count)));
-	this->stream->log(camera_metrics + "/blob_count", rerun::Scalars(static_cast<float>(camera_sample.blob_count)));
-	this->stream->log(camera_metrics + "/matched_blob_count",
-	                  rerun::Scalars(static_cast<float>(matched_blob_count)));
+	this->stream->log(device_metrics + "/brightness", rerun::Scalars(found_pose.average_blob_brightness));
+	this->stream->log(device_metrics + "/matched_blob_count", rerun::Scalars(matched_blob_count));
 }
 
 /*
@@ -280,43 +307,79 @@ RerunContext::LogFrameMetrics(const CameraSample &camera_sample,
  */
 
 void
-RerunContext::LogTrackedFrame(const CameraSample &camera_sample,
-                              t_constellation_device_id_t device_id,
-                              const t_constellation_tracker_led_model &led_model,
-                              const t_camera_calibration &calibration,
-                              const xrt_pose &Txr_world_cam,
-                              const xrt_pose &Txr_cam_device,
-                              const xrt_pose &Txr_world_device,
-                              float brightness)
+RerunContext::LogSample(const ConstellationTracker &tracker, const CameraSample &camera_sample)
 {
 	std::string timeline_name = GetTimelineName(camera_sample);
 	std::string camera_entity = GetWorldCameraEntityName(camera_sample.mosaic_index, camera_sample.camera_index);
-	std::string camera_device_entity = GetCameraTrackedDeviceEntityName(camera_sample, device_id);
-	std::string world_device_entity = GetWorldDeviceEntityName(device_id);
 	std::string camera_image_entity =
 	    GetCameraImageEntityName(camera_sample.mosaic_index, camera_sample.camera_index);
 
-	// Convert all poses from OpenXR (Y-up) to OpenCV (Y-down) coordinate space
-	xrt_pose Tcv_world_cam;
-	xrt_pose Tcv_cam_device;
-	xrt_pose Tcv_world_device;
-	math_pose_convert_opencv(&Txr_world_cam, &Tcv_world_cam);
-	math_pose_convert_opencv(&Txr_cam_device, &Tcv_cam_device);
-	math_pose_convert_opencv(&Txr_world_device, &Tcv_world_device);
+	std::optional<xrt_pose> Tcv_world_cam = std::nullopt;
+	if (camera_sample.Txr_world_cam.has_value()) {
+		xrt_pose Tcv_world_cam_value;
+		math_pose_convert_opencv(&camera_sample.Txr_world_cam.value(), &Tcv_world_cam_value);
+		Tcv_world_cam = Tcv_world_cam_value;
+
+		this->stream->log(camera_entity, ToRerunTransform(Tcv_world_cam_value));
+	}
+
+	const auto &calibration =
+	    tracker.mosaics[camera_sample.mosaic_index]->cameras[camera_sample.camera_index]->calibration;
 
 	this->LogStaticScene(camera_sample, calibration);
 	this->stream->set_time_timestamp_nanos_since_epoch(timeline_name, camera_sample.timestamp_ns);
 
-	this->stream->log(camera_entity, ToRerunTransform(Tcv_world_cam));
-	this->stream->log(world_device_entity, ToRerunTransform(Tcv_world_device));
-	this->stream->log(camera_device_entity, ToRerunTransform(Tcv_cam_device));
+	for (uint32_t i = 0; i < camera_sample.device_count; i++) {
+		const auto &device_state = camera_sample.device_states[i];
+		t_constellation_device_id_t device_id = device_state.device_id;
 
-	// Log LED model only under the world device entity (primary representation).
-	// The camera's view inherits this through the transform hierarchy.
-	this->LogLedModel(world_device_entity, led_model);
-	this->LogBlobSet(camera_image_entity + "/matched_blobs", camera_sample, device_id, true);
-	this->LogBlobSet(camera_image_entity + "/other_blobs", camera_sample, device_id, false);
-	this->LogFrameMetrics(camera_sample, device_id, brightness);
+		auto device_iter =
+		    std::find_if(tracker.devices.begin(), tracker.devices.end(),
+		                 [device_id](const std::unique_ptr<Device> &d) { return d->id == device_id; });
+		if (device_iter == tracker.devices.end()) {
+			U_LOG_W("Device with ID %u not found in tracker devices.", device_id);
+			continue;
+		}
+
+		auto &device = *device_iter;
+
+		// Found pose in this frame
+		if (device_state.found_pose.has_value()) {
+			const auto &found_pose = device_state.found_pose.value();
+
+			std::string camera_device_pose_entity =
+			    GetCameraTrackedDevicePoseEntityName(camera_sample, device_id, false);
+
+			const xrt_pose &Tcv_cam_device = found_pose.Tcv_cam_device;
+			this->stream->log(camera_device_pose_entity, ToRerunTransform(Tcv_cam_device));
+			this->LogLedModel(camera_device_pose_entity, device_id, device->params.led_model, false);
+		}
+
+		// Prior pose in this frame
+		if (device_state.Txr_world_device_prior.has_value() && camera_sample.Txr_world_cam.has_value()) {
+			std::string camera_device_prior_entity =
+			    GetCameraTrackedDevicePoseEntityName(camera_sample, device_id, true);
+
+			xrt_pose Txr_cam_world;
+			math_pose_invert(&camera_sample.Txr_world_cam.value(), &Txr_cam_world);
+
+			xrt_pose Txr_cam_device_prior;
+			math_pose_transform(&Txr_cam_world,                               //
+			                    &device_state.Txr_world_device_prior.value(), //
+			                    &Txr_cam_device_prior);                       //
+
+			xrt_pose Tcv_cam_device_prior;
+			math_pose_convert_opencv(&Txr_cam_device_prior, &Tcv_cam_device_prior);
+
+			this->stream->log(camera_device_prior_entity, ToRerunTransform(Tcv_cam_device_prior));
+			this->LogLedModel(camera_device_prior_entity, device_id, device->params.led_model, true);
+		}
+
+		this->LogFrameDeviceMetrics(camera_sample, device_state);
+	}
+
+	this->LogFrameCameraMetrics(camera_sample);
+	this->LogBlobSet(camera_sample);
 }
 
 }; // namespace xrt::tracking::constellation
