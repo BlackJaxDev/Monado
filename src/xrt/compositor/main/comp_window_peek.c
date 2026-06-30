@@ -23,10 +23,28 @@
 #endif
 #include <SDL2/SDL_vulkan.h>
 
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
 
 DEBUG_GET_ONCE_OPTION(window_peek, "XRT_WINDOW_PEEK", NULL)
 
 #define PEEK_IMAGE_USAGE (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+#define XRE_OPENXR_EYE_RESOLUTION_PRESET_ENV "XRE_OPENXR_EYE_RESOLUTION_PRESET"
+#define XRE_OPENXR_EYE_RESOLUTION_SCALE_ENV "XRE_OPENXR_EYE_RESOLUTION_SCALE"
+#define XRE_OPENXR_EYE_RESOLUTION_WIDTH_ENV "XRE_OPENXR_EYE_RESOLUTION_WIDTH"
+#define XRE_OPENXR_EYE_RESOLUTION_HEIGHT_ENV "XRE_OPENXR_EYE_RESOLUTION_HEIGHT"
+#define XRE_UNIT_TEST_OPENXR_EYE_RESOLUTION_PRESET_ENV "XRE_UNIT_TEST_OPENXR_EYE_RESOLUTION_PRESET"
+
+struct comp_window_peek_rect
+{
+	int32_t x;
+	int32_t y;
+	uint32_t width;
+	uint32_t height;
+};
 
 struct comp_window_peek
 {
@@ -36,8 +54,10 @@ struct comp_window_peek
 	enum comp_window_peek_eye eye;
 	SDL_Window *window;
 	uint32_t width, height;
+	uint32_t view_count;
 	bool running;
 	bool hidden;
+	char title[256];
 
 	struct vk_cmd_pool pool;
 	VkCommandBuffer cmd;
@@ -45,6 +65,125 @@ struct comp_window_peek
 	struct os_thread_helper oth;
 };
 
+
+static const char *
+getenv_non_empty(const char *name)
+{
+	const char *value = getenv(name);
+	return value != NULL && value[0] != '\0' ? value : NULL;
+}
+
+static uint32_t
+getenv_u32_or(const char *name, uint32_t fallback)
+{
+	const char *value = getenv_non_empty(name);
+	if (value == NULL) {
+		return fallback;
+	}
+
+	char *end = NULL;
+	unsigned long parsed = strtoul(value, &end, 10);
+	if (end == value || parsed == 0 || parsed > UINT32_MAX) {
+		return fallback;
+	}
+
+	return (uint32_t)parsed;
+}
+
+static const char *
+peek_eye_name(enum comp_window_peek_eye eye)
+{
+	switch (eye) {
+	case COMP_WINDOW_PEEK_EYE_LEFT: return "left";
+	case COMP_WINDOW_PEEK_EYE_RIGHT: return "right";
+	case COMP_WINDOW_PEEK_EYE_BOTH: return "both";
+	default: return "unknown";
+	}
+}
+
+static struct comp_window_peek_rect
+calc_aspect_fit_rect(uint32_t src_width, uint32_t src_height, uint32_t dst_width, uint32_t dst_height)
+{
+	struct comp_window_peek_rect rect = {
+	    .x = 0,
+	    .y = 0,
+	    .width = dst_width,
+	    .height = dst_height,
+	};
+
+	if (src_width == 0 || src_height == 0 || dst_width == 0 || dst_height == 0) {
+		return rect;
+	}
+
+	uint64_t fit_width = dst_width;
+	uint64_t fit_height = (fit_width * src_height) / src_width;
+
+	if (fit_height == 0) {
+		fit_height = 1;
+	}
+
+	if (fit_height > dst_height) {
+		fit_height = dst_height;
+		fit_width = (fit_height * src_width) / src_height;
+		if (fit_width == 0) {
+			fit_width = 1;
+		}
+	}
+
+	rect.width = (uint32_t)fit_width;
+	rect.height = (uint32_t)fit_height;
+	rect.x = (int32_t)((dst_width - rect.width) / 2);
+	rect.y = (int32_t)((dst_height - rect.height) / 2);
+
+	return rect;
+}
+
+static void
+update_window_title(struct comp_window_peek *w,
+                    uint32_t src_width,
+                    uint32_t src_height,
+                    const struct comp_window_peek_rect *dst_rect)
+{
+	uint32_t view_count = w->eye == COMP_WINDOW_PEEK_EYE_BOTH && w->view_count > 1 ? w->view_count : 1;
+	uint32_t src_eye_width = src_width / view_count;
+	if (src_eye_width == 0) {
+		src_eye_width = src_width;
+	}
+
+	uint32_t preview_eye_width = dst_rect->width / view_count;
+	if (preview_eye_width == 0) {
+		preview_eye_width = dst_rect->width;
+	}
+
+	uint32_t title_eye_width = getenv_u32_or(XRE_OPENXR_EYE_RESOLUTION_WIDTH_ENV, src_eye_width);
+	uint32_t title_eye_height = getenv_u32_or(XRE_OPENXR_EYE_RESOLUTION_HEIGHT_ENV, src_height);
+	double scale = title_eye_width != 0 ? (double)preview_eye_width / (double)title_eye_width : 0.0;
+
+	const char *preset = getenv_non_empty(XRE_OPENXR_EYE_RESOLUTION_PRESET_ENV);
+	if (preset == NULL) {
+		preset = getenv_non_empty(XRE_UNIT_TEST_OPENXR_EYE_RESOLUTION_PRESET_ENV);
+	}
+	if (preset == NULL) {
+		preset = "RuntimeRecommended";
+	}
+
+	const char *requested_scale = getenv_non_empty(XRE_OPENXR_EYE_RESOLUTION_SCALE_ENV);
+	if (requested_scale == NULL) {
+		requested_scale = "1.00";
+	}
+
+	char title[sizeof(w->title)];
+	(void)snprintf(title, sizeof(title),
+	               "Monado preview %s | preset %s @ %sx | internal eye %ux%u | window %ux%u | preview eye %ux%u %.2fx",
+	               peek_eye_name(w->eye), preset, requested_scale, title_eye_width, title_eye_height, w->width,
+	               w->height, preview_eye_width, dst_rect->height, scale);
+
+	if (strcmp(w->title, title) != 0) {
+		strncpy(w->title, title, sizeof(w->title) - 1);
+		w->title[sizeof(w->title) - 1] = '\0';
+		SDL_SetWindowTitle(w->window, w->title);
+	}
+}
 
 static inline struct vk_bundle *
 get_vk(struct comp_window_peek *w)
@@ -89,15 +228,20 @@ window_peek_run_thread(void *ptr)
 				case SDL_WINDOWEVENT_HIDDEN: w->hidden = true; break;
 				case SDL_WINDOWEVENT_SHOWN: w->hidden = false; break;
 				case SDL_WINDOWEVENT_SIZE_CHANGED:
-					w->width = event.window.data1;
-					w->height = event.window.data2;
+					w->width = event.window.data1 > 0 ? (uint32_t)event.window.data1 : 0;
+					w->height = event.window.data2 > 0 ? (uint32_t)event.window.data2 : 0;
 					break;
 #if SDL_VERSION_ATLEAST(2, 0, 18)
 				case SDL_WINDOWEVENT_DISPLAY_CHANGED:
 #endif
-				case SDL_WINDOWEVENT_MOVED:
-					SDL_GetWindowSize(w->window, (int *)&w->width, (int *)&w->height);
+				case SDL_WINDOWEVENT_MOVED: {
+					int width = 0;
+					int height = 0;
+					SDL_GetWindowSize(w->window, &width, &height);
+					w->width = width > 0 ? (uint32_t)width : 0;
+					w->height = height > 0 ? (uint32_t)height : 0;
 					break;
+				}
 				default: break;
 				}
 				break;
@@ -160,6 +304,7 @@ comp_window_peek_create(struct comp_compositor *c)
 	struct comp_window_peek *w = U_TYPED_CALLOC(struct comp_window_peek);
 	w->c = c;
 	w->eye = eye;
+	w->view_count = xdev->hmd->view_count;
 
 
 	/*
@@ -295,6 +440,10 @@ comp_window_peek_blit(struct comp_window_peek *w, VkImage src, int32_t width, in
 		return;
 	}
 
+	if (w->width == 0 || w->height == 0 || width <= 0 || height <= 0) {
+		return;
+	}
+
 	if (w->width != w->base.base.width || w->height != w->base.base.height) {
 		COMP_DEBUG(w->c, "Resizing swapchain");
 		create_images(w);
@@ -356,6 +505,18 @@ comp_window_peek_blit(struct comp_window_peek *w, VkImage src, int32_t width, in
 	    VK_PIPELINE_STAGE_TRANSFER_BIT,       // dstStageMask
 	    range);                               // subresourceRange
 
+	VkClearColorValue clear = {
+	    .float32 = {0.0f, 0.0f, 0.0f, 1.0f},
+	};
+
+	vk->vkCmdClearColorImage(                  //
+	    w->cmd,                                // commandBuffer
+	    dst,                                   // image
+	    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,  // imageLayout
+	    &clear,                                // pColor
+	    1,                                     // rangeCount
+	    &range);                               // pRanges
+
 	VkImageBlit blit = {
 	    .srcSubresource =
 	        {
@@ -373,8 +534,13 @@ comp_window_peek_blit(struct comp_window_peek *w, VkImage src, int32_t width, in
 	blit.srcOffsets[1].y = height;
 	blit.srcOffsets[1].z = 1;
 
-	blit.dstOffsets[1].x = w->width;
-	blit.dstOffsets[1].y = w->height;
+	struct comp_window_peek_rect dst_rect = calc_aspect_fit_rect((uint32_t)width, (uint32_t)height, w->width, w->height);
+	update_window_title(w, (uint32_t)width, (uint32_t)height, &dst_rect);
+
+	blit.dstOffsets[0].x = dst_rect.x;
+	blit.dstOffsets[0].y = dst_rect.y;
+	blit.dstOffsets[1].x = dst_rect.x + (int32_t)dst_rect.width;
+	blit.dstOffsets[1].y = dst_rect.y + (int32_t)dst_rect.height;
 	blit.dstOffsets[1].z = 1;
 
 	vk->vkCmdBlitImage(                       //

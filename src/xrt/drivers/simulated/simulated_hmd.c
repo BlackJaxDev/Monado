@@ -25,7 +25,13 @@
 
 #include "simulated_interface.h"
 
+#ifdef XRT_OS_WINDOWS
+#include "xrt/xrt_windows.h"
+#endif
+
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 
 /*
@@ -45,8 +51,11 @@ struct simulated_hmd
 
 	struct xrt_pose pose;
 	struct xrt_pose center;
+	struct xrt_vec3 user_position;
+	struct xrt_vec3 user_rotation;
 
 	uint64_t created_ns;
+	int64_t last_user_update_ns;
 	float diameter_m;
 
 	enum u_logging_level log_level;
@@ -68,11 +77,138 @@ simulated_hmd(struct xrt_device *xdev)
 
 DEBUG_GET_ONCE_LOG_OPTION(simulated_log, "SIMULATED_LOG", U_LOGGING_WARN)
 DEBUG_GET_ONCE_NUM_OPTION(view_count, "SIMULATED_VIEW_COUNT", 2)
+DEBUG_GET_ONCE_NUM_OPTION(display_width, "SIMULATED_DISPLAY_WIDTH", 1280)
+DEBUG_GET_ONCE_NUM_OPTION(display_height, "SIMULATED_DISPLAY_HEIGHT", 720)
+
+#define SIMULATED_HMD_POSE_MODE_ENV "SIMULATED_HMD_POSE_MODE"
+#define SIMULATED_HMD_POSE_MODE_WOBBLE "wobble"
+#define SIMULATED_HMD_POSE_MODE_ROTATE "rotate"
+#define SIMULATED_HMD_POSE_MODE_STATIONARY "stationary"
+#define SIMULATED_HMD_POSE_MODE_USER_INPUT "user_input"
+#define SIMULATED_HMD_USER_INPUT_DISTANCE_M 0.25f
+#define SIMULATED_HMD_USER_INPUT_ROTATION_RAD ((float)(15.0 * M_PI / 180.0))
+#define SIMULATED_HMD_USER_INPUT_YAW_RATE_RAD_PER_S ((float)(45.0 * M_PI / 180.0))
+#define SIMULATED_HMD_USER_INPUT_FAST_YAW_MULTIPLIER 4.0f
+#define SIMULATED_HMD_USER_INPUT_EASE_RATE 8.0f
 
 #define HMD_TRACE(hmd, ...) U_LOG_XDEV_IFL_T(&hmd->base, hmd->log_level, __VA_ARGS__)
 #define HMD_DEBUG(hmd, ...) U_LOG_XDEV_IFL_D(&hmd->base, hmd->log_level, __VA_ARGS__)
 #define HMD_INFO(hmd, ...) U_LOG_XDEV_IFL_I(&hmd->base, hmd->log_level, __VA_ARGS__)
+#define HMD_WARN(hmd, ...) U_LOG_XDEV_IFL_W(&hmd->base, hmd->log_level, __VA_ARGS__)
 #define HMD_ERROR(hmd, ...) U_LOG_XDEV_IFL_E(&hmd->base, hmd->log_level, __VA_ARGS__)
+
+static bool
+string_equal(const char *left, const char *right)
+{
+	return left != NULL && right != NULL && strcmp(left, right) == 0;
+}
+
+static enum simulated_movement
+get_active_movement(struct simulated_hmd *hmd)
+{
+	const char *mode = getenv(SIMULATED_HMD_POSE_MODE_ENV);
+	if (string_equal(mode, SIMULATED_HMD_POSE_MODE_WOBBLE)) {
+		return SIMULATED_MOVEMENT_WOBBLE;
+	}
+	if (string_equal(mode, SIMULATED_HMD_POSE_MODE_ROTATE)) {
+		return SIMULATED_MOVEMENT_ROTATE;
+	}
+	if (string_equal(mode, SIMULATED_HMD_POSE_MODE_STATIONARY)) {
+		return SIMULATED_MOVEMENT_STATIONARY;
+	}
+	if (string_equal(mode, SIMULATED_HMD_POSE_MODE_USER_INPUT)) {
+		return SIMULATED_MOVEMENT_USER_INPUT;
+	}
+
+	return hmd->movement;
+}
+
+static void
+reset_user_input_pose(struct simulated_hmd *hmd)
+{
+	hmd->user_position = (struct xrt_vec3)XRT_VEC3_ZERO;
+	hmd->user_rotation = (struct xrt_vec3)XRT_VEC3_ZERO;
+	hmd->last_user_update_ns = 0;
+}
+
+#ifdef XRT_OS_WINDOWS
+static bool
+key_down(int virtual_key)
+{
+	return (GetAsyncKeyState(virtual_key) & 0x8000) != 0;
+}
+#endif
+
+static float
+ease_towards(float current, float target, float dt_s)
+{
+	float alpha = 1.0f - expf(-SIMULATED_HMD_USER_INPUT_EASE_RATE * dt_s);
+	return current + ((target - current) * alpha);
+}
+
+static void
+apply_user_input_pose(struct simulated_hmd *hmd, int64_t at_timestamp_ns)
+{
+	struct xrt_pose tmp = XRT_POSE_IDENTITY;
+
+#ifdef XRT_OS_WINDOWS
+	float dt_s = 1.0f / 90.0f;
+	if (hmd->last_user_update_ns > 0 && at_timestamp_ns > hmd->last_user_update_ns) {
+		dt_s = (float)time_ns_to_s(at_timestamp_ns - hmd->last_user_update_ns);
+		if (dt_s > 0.1f) {
+			dt_s = 0.1f;
+		}
+	}
+	hmd->last_user_update_ns = at_timestamp_ns;
+
+	struct xrt_vec3 target_position = XRT_VEC3_ZERO;
+	target_position.x += key_down('D') ? 1.0f : 0.0f;
+	target_position.x -= key_down('A') ? 1.0f : 0.0f;
+	target_position.y += key_down('Q') ? 1.0f : 0.0f;
+	target_position.y -= key_down('E') ? 1.0f : 0.0f;
+	target_position.z -= key_down('W') ? 1.0f : 0.0f;
+	target_position.z += key_down('S') ? 1.0f : 0.0f;
+
+	float position_len_sq = target_position.x * target_position.x + target_position.y * target_position.y +
+	                        target_position.z * target_position.z;
+	if (position_len_sq > 0.0f) {
+		float inv_len = 1.0f / sqrtf(position_len_sq);
+		target_position.x *= inv_len * SIMULATED_HMD_USER_INPUT_DISTANCE_M;
+		target_position.y *= inv_len * SIMULATED_HMD_USER_INPUT_DISTANCE_M;
+		target_position.z *= inv_len * SIMULATED_HMD_USER_INPUT_DISTANCE_M;
+	}
+
+	hmd->user_position.x = ease_towards(hmd->user_position.x, target_position.x, dt_s);
+	hmd->user_position.y = ease_towards(hmd->user_position.y, target_position.y, dt_s);
+	hmd->user_position.z = ease_towards(hmd->user_position.z, target_position.z, dt_s);
+
+	float target_pitch = 0.0f;
+	target_pitch += key_down(VK_UP) ? SIMULATED_HMD_USER_INPUT_ROTATION_RAD : 0.0f;
+	target_pitch -= key_down(VK_DOWN) ? SIMULATED_HMD_USER_INPUT_ROTATION_RAD : 0.0f;
+
+	float yaw_direction = 0.0f;
+	yaw_direction += key_down(VK_LEFT) ? 1.0f : 0.0f;
+	yaw_direction -= key_down(VK_RIGHT) ? 1.0f : 0.0f;
+	if (yaw_direction != 0.0f) {
+		float yaw_multiplier =
+		    key_down(VK_SHIFT) ? SIMULATED_HMD_USER_INPUT_FAST_YAW_MULTIPLIER : 1.0f;
+		hmd->user_rotation.y += yaw_direction * SIMULATED_HMD_USER_INPUT_YAW_RATE_RAD_PER_S * yaw_multiplier * dt_s;
+	}
+
+	float target_roll = 0.0f;
+	target_roll -= key_down(VK_OEM_COMMA) ? SIMULATED_HMD_USER_INPUT_ROTATION_RAD : 0.0f;
+	target_roll += key_down(VK_OEM_PERIOD) ? SIMULATED_HMD_USER_INPUT_ROTATION_RAD : 0.0f;
+
+	hmd->user_rotation.x = ease_towards(hmd->user_rotation.x, target_pitch, dt_s);
+	hmd->user_rotation.z = ease_towards(hmd->user_rotation.z, target_roll, dt_s);
+#else
+	reset_user_input_pose(hmd);
+#endif
+
+	tmp.position = hmd->user_position;
+	math_quat_from_euler_angles(&hmd->user_rotation, &tmp.orientation);
+	math_pose_transform(&hmd->center, &tmp, &hmd->pose);
+}
 
 static void
 simulated_hmd_destroy(struct xrt_device *xdev)
@@ -107,7 +243,12 @@ simulated_hmd_get_tracked_pose(struct xrt_device *xdev,
 	const double t4 = t * 4;
 	const struct xrt_vec3 up = {0, 1, 0};
 
-	switch (hmd->movement) {
+	enum simulated_movement movement = get_active_movement(hmd);
+	if (movement != SIMULATED_MOVEMENT_USER_INPUT) {
+		reset_user_input_pose(hmd);
+	}
+
+	switch (movement) {
 	default:
 	case SIMULATED_MOVEMENT_WOBBLE: {
 		struct xrt_pose tmp = XRT_POSE_IDENTITY;
@@ -135,6 +276,9 @@ simulated_hmd_get_tracked_pose(struct xrt_device *xdev,
 	case SIMULATED_MOVEMENT_STATIONARY:
 		// Reset pose.
 		hmd->pose = hmd->center;
+		break;
+	case SIMULATED_MOVEMENT_USER_INPUT:
+		apply_user_input_pose(hmd, at_timestamp_ns);
 		break;
 	}
 
@@ -219,8 +363,16 @@ simulated_hmd_create(enum simulated_movement movement, const struct xrt_pose *ce
 	// Setup info.
 	bool ret = true;
 	struct u_device_simple_info info;
-	info.display.w_pixels = 1280;
-	info.display.h_pixels = 720;
+	int display_width = debug_get_num_option_display_width();
+	int display_height = debug_get_num_option_display_height();
+	if (display_width <= 0 || display_height <= 0) {
+		HMD_WARN(hmd, "Invalid simulated display size %dx%d, using 1280x720.", display_width, display_height);
+		display_width = 1280;
+		display_height = 720;
+	}
+
+	info.display.w_pixels = display_width;
+	info.display.h_pixels = display_height;
 	info.display.w_meters = 0.13f;
 	info.display.h_meters = 0.07f;
 	info.lens_horizontal_separation_meters = 0.13f / 2.0f;

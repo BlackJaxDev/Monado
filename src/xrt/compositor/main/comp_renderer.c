@@ -200,22 +200,51 @@ calc_viewport_data(struct comp_renderer *r,
 	int w_i32 = pre_rotate ? r->c->xdev->hmd->screens[0].h_pixels : r->c->xdev->hmd->screens[0].w_pixels;
 	int h_i32 = pre_rotate ? r->c->xdev->hmd->screens[0].w_pixels : r->c->xdev->hmd->screens[0].h_pixels;
 
-	float scale_x = (float)r->c->target->width / (float)w_i32;
-	float scale_y = (float)r->c->target->height / (float)h_i32;
+	struct render_viewport_data target_rect = {
+	    .x = 0,
+	    .y = 0,
+	    .w = r->c->target->width,
+	    .h = r->c->target->height,
+	};
+
+	if (w_i32 > 0 && h_i32 > 0 && target_rect.w > 0 && target_rect.h > 0) {
+		uint64_t fit_width = target_rect.w;
+		uint64_t fit_height = (fit_width * (uint32_t)h_i32) / (uint32_t)w_i32;
+
+		if (fit_height == 0) {
+			fit_height = 1;
+		}
+
+		if (fit_height > target_rect.h) {
+			fit_height = target_rect.h;
+			fit_width = (fit_height * (uint32_t)w_i32) / (uint32_t)h_i32;
+			if (fit_width == 0) {
+				fit_width = 1;
+			}
+		}
+
+		target_rect.w = (uint32_t)fit_width;
+		target_rect.h = (uint32_t)fit_height;
+		target_rect.x = (r->c->target->width - target_rect.w) / 2;
+		target_rect.y = (r->c->target->height - target_rect.h) / 2;
+	}
+
+	float scale_x = (float)target_rect.w / (float)w_i32;
+	float scale_y = (float)target_rect.h / (float)h_i32;
 
 	for (uint32_t i = 0; i < view_count; ++i) {
 		struct xrt_view *v = &r->c->xdev->hmd->views[i];
 		if (pre_rotate) {
 			out_viewport_data[i] = (struct render_viewport_data){
-			    .x = (uint32_t)(v->viewport.y_pixels * scale_x),
-			    .y = (uint32_t)(v->viewport.x_pixels * scale_y),
+			    .x = target_rect.x + (uint32_t)(v->viewport.y_pixels * scale_x),
+			    .y = target_rect.y + (uint32_t)(v->viewport.x_pixels * scale_y),
 			    .w = (uint32_t)(v->viewport.h_pixels * scale_x),
 			    .h = (uint32_t)(v->viewport.w_pixels * scale_y),
 			};
 		} else {
 			out_viewport_data[i] = (struct render_viewport_data){
-			    .x = (uint32_t)(v->viewport.x_pixels * scale_x),
-			    .y = (uint32_t)(v->viewport.y_pixels * scale_y),
+			    .x = target_rect.x + (uint32_t)(v->viewport.x_pixels * scale_x),
+			    .y = target_rect.y + (uint32_t)(v->viewport.y_pixels * scale_y),
 			    .w = (uint32_t)(v->viewport.w_pixels * scale_x),
 			    .h = (uint32_t)(v->viewport.h_pixels * scale_y),
 			};

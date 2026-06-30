@@ -10,6 +10,8 @@
  */
 
 #include <stdlib.h>
+#include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include "xrt/xrt_compiler.h"
 #include "main/comp_window.h"
@@ -44,10 +46,24 @@ struct comp_window_mswin
 	bool should_exit;
 	bool thread_started;
 	bool thread_exited;
+
+	char base_title[64];
+	char current_title[256];
 };
 
 static WCHAR szWindowClass[] = L"Monado";
 static WCHAR szWindowData[] = L"MonadoWindow";
+
+#define XRE_OPENXR_EYE_RESOLUTION_PRESET_ENV "XRE_OPENXR_EYE_RESOLUTION_PRESET"
+#define XRE_OPENXR_EYE_RESOLUTION_SCALE_ENV "XRE_OPENXR_EYE_RESOLUTION_SCALE"
+#define XRE_OPENXR_EYE_RESOLUTION_WIDTH_ENV "XRE_OPENXR_EYE_RESOLUTION_WIDTH"
+#define XRE_OPENXR_EYE_RESOLUTION_HEIGHT_ENV "XRE_OPENXR_EYE_RESOLUTION_HEIGHT"
+#define XRE_UNIT_TEST_OPENXR_EYE_RESOLUTION_PRESET_ENV "XRE_UNIT_TEST_OPENXR_EYE_RESOLUTION_PRESET"
+#define SIMULATED_HMD_POSE_MODE_ENV "SIMULATED_HMD_POSE_MODE"
+#define SIMULATED_HMD_POSE_MODE_WOBBLE "wobble"
+#define SIMULATED_HMD_POSE_MODE_USER_INPUT "user_input"
+#define ID_SIMULATED_HMD_POSE_WOBBLE 50001
+#define ID_SIMULATED_HMD_POSE_USER_INPUT 50003
 
 #define COMP_ERROR_GETLASTERROR(C, MSG_WITH_PLACEHOLDER, MSG_WITHOUT_PLACEHOLDER)                                      \
 	do {                                                                                                           \
@@ -61,6 +77,69 @@ static WCHAR szWindowData[] = L"MonadoWindow";
 			COMP_ERROR(C, MSG_WITHOUT_PLACEHOLDER);                                                        \
 		}                                                                                                      \
 	} while (0)
+
+static void
+comp_window_mswin_refresh_title(struct comp_window_mswin *cwm);
+
+static const char *
+get_simulated_hmd_pose_mode(void)
+{
+	const char *mode = getenv(SIMULATED_HMD_POSE_MODE_ENV);
+	return mode != NULL && mode[0] != '\0' ? mode : SIMULATED_HMD_POSE_MODE_WOBBLE;
+}
+
+static UINT
+get_pose_mode_check_flag(const char *active_mode, const char *mode)
+{
+	return strcmp(active_mode, mode) == 0 ? MF_CHECKED : MF_UNCHECKED;
+}
+
+static void
+set_simulated_hmd_pose_mode(const char *mode)
+{
+	if (mode == NULL) {
+		return;
+	}
+
+	(void)_putenv_s(SIMULATED_HMD_POSE_MODE_ENV, mode);
+	SetEnvironmentVariableA(SIMULATED_HMD_POSE_MODE_ENV, mode);
+}
+
+static void
+show_simulated_hmd_pose_menu(HWND window, LPARAM lParam)
+{
+	POINT point = {0};
+	if ((int)(short)LOWORD(lParam) == -1 && (int)(short)HIWORD(lParam) == -1) {
+		GetCursorPos(&point);
+	} else {
+		point.x = (int)(short)LOWORD(lParam);
+		point.y = (int)(short)HIWORD(lParam);
+	}
+
+	HMENU menu = CreatePopupMenu();
+	if (menu == NULL) {
+		return;
+	}
+
+	const char *mode = get_simulated_hmd_pose_mode();
+	AppendMenuA(menu, MF_STRING | get_pose_mode_check_flag(mode, SIMULATED_HMD_POSE_MODE_WOBBLE),
+	            ID_SIMULATED_HMD_POSE_WOBBLE, "Figure eight transform test");
+	AppendMenuA(menu, MF_STRING | get_pose_mode_check_flag(mode, SIMULATED_HMD_POSE_MODE_USER_INPUT),
+	            ID_SIMULATED_HMD_POSE_USER_INPUT, "User input HMD");
+	AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+	AppendMenuA(menu, MF_STRING | MF_GRAYED, 0, "WASD/QE move, up/down pitch, left/right yaw, comma/period roll");
+	AppendMenuA(menu, MF_STRING | MF_GRAYED, 0, "Hold Shift to yaw faster");
+
+	SetForegroundWindow(window);
+	UINT command = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, point.x, point.y, 0, window, NULL);
+	DestroyMenu(menu);
+
+	switch (command) {
+	case ID_SIMULATED_HMD_POSE_WOBBLE: set_simulated_hmd_pose_mode(SIMULATED_HMD_POSE_MODE_WOBBLE); break;
+	case ID_SIMULATED_HMD_POSE_USER_INPUT: set_simulated_hmd_pose_mode(SIMULATED_HMD_POSE_MODE_USER_INPUT); break;
+	default: break;
+	}
+}
 /*
  *
  * Functions.
@@ -87,6 +166,22 @@ WndProc(HWND hWnd, unsigned int message, WPARAM wParam, LPARAM lParam)
 	case WM_PAINT:
 		// COMP_INFO(c, "WM_PAINT");
 		draw_window(hWnd, cwm);
+		break;
+	case WM_SIZE: {
+		RECT rect = {0};
+		if (wParam != SIZE_MINIMIZED && GetClientRect(hWnd, &rect)) {
+			LONG width = rect.right - rect.left;
+			LONG height = rect.bottom - rect.top;
+			if (width > 0 && height > 0) {
+				cwm->base.base.width = (uint32_t)width;
+				cwm->base.base.height = (uint32_t)height;
+				comp_window_mswin_refresh_title(cwm);
+			}
+		}
+		break;
+	}
+	case WM_CONTEXTMENU:
+		show_simulated_hmd_pose_menu(hWnd, lParam);
 		break;
 	case WM_QUIT:
 		// COMP_INFO(c, "WM_QUIT");
@@ -115,6 +210,130 @@ get_vk(struct comp_window_mswin *cwm)
 	return &cwm->base.base.c->base.vk;
 }
 
+static const char *
+getenv_non_empty(const char *name)
+{
+	const char *value = getenv(name);
+	return value != NULL && value[0] != '\0' ? value : NULL;
+}
+
+static uint32_t
+getenv_u32_or(const char *name, uint32_t fallback)
+{
+	const char *value = getenv_non_empty(name);
+	if (value == NULL) {
+		return fallback;
+	}
+
+	char *end = NULL;
+	unsigned long parsed = strtoul(value, &end, 10);
+	if (end == value || parsed == 0 || parsed > UINT32_MAX) {
+		return fallback;
+	}
+
+	return (uint32_t)parsed;
+}
+
+static void
+set_window_title_utf8(HWND window, const char *title)
+{
+	if (window == NULL || title == NULL) {
+		return;
+	}
+
+	WCHAR wide_title[256];
+	int count = MultiByteToWideChar(CP_UTF8, 0, title, -1, wide_title, ARRAY_SIZE(wide_title));
+	if (count <= 0) {
+		return;
+	}
+
+	SetWindowTextW(window, wide_title);
+}
+
+static void
+calc_aspect_fit(uint32_t src_width,
+                uint32_t src_height,
+                uint32_t dst_width,
+                uint32_t dst_height,
+                uint32_t *out_width,
+                uint32_t *out_height)
+{
+	*out_width = dst_width;
+	*out_height = dst_height;
+
+	if (src_width == 0 || src_height == 0 || dst_width == 0 || dst_height == 0) {
+		return;
+	}
+
+	uint64_t fit_width = dst_width;
+	uint64_t fit_height = (fit_width * src_height) / src_width;
+	if (fit_height == 0) {
+		fit_height = 1;
+	}
+
+	if (fit_height > dst_height) {
+		fit_height = dst_height;
+		fit_width = (fit_height * src_width) / src_height;
+		if (fit_width == 0) {
+			fit_width = 1;
+		}
+	}
+
+	*out_width = (uint32_t)fit_width;
+	*out_height = (uint32_t)fit_height;
+}
+
+static void
+comp_window_mswin_refresh_title(struct comp_window_mswin *cwm)
+{
+	struct comp_target *ct = &cwm->base.base;
+	struct xrt_device *xdev = ct->c->xdev;
+	uint32_t view_count = xdev->hmd->view_count > 1 ? xdev->hmd->view_count : 1;
+	uint32_t source_eye_width = xdev->hmd->views[0].display.w_pixels;
+	uint32_t source_eye_height = xdev->hmd->views[0].display.h_pixels;
+	uint32_t full_source_width = xdev->hmd->screens[0].w_pixels;
+	uint32_t full_source_height = xdev->hmd->screens[0].h_pixels;
+	uint32_t content_width = ct->width;
+	uint32_t content_height = ct->height;
+
+	calc_aspect_fit(full_source_width, full_source_height, ct->width, ct->height, &content_width, &content_height);
+
+	uint32_t preview_eye_width = content_width / view_count;
+	if (preview_eye_width == 0) {
+		preview_eye_width = content_width;
+	}
+
+	uint32_t title_eye_width = getenv_u32_or(XRE_OPENXR_EYE_RESOLUTION_WIDTH_ENV, source_eye_width);
+	uint32_t title_eye_height = getenv_u32_or(XRE_OPENXR_EYE_RESOLUTION_HEIGHT_ENV, source_eye_height);
+	double scale = title_eye_width != 0 ? (double)preview_eye_width / (double)title_eye_width : 0.0;
+
+	const char *preset = getenv_non_empty(XRE_OPENXR_EYE_RESOLUTION_PRESET_ENV);
+	if (preset == NULL) {
+		preset = getenv_non_empty(XRE_UNIT_TEST_OPENXR_EYE_RESOLUTION_PRESET_ENV);
+	}
+	if (preset == NULL) {
+		preset = "RuntimeRecommended";
+	}
+
+	const char *requested_scale = getenv_non_empty(XRE_OPENXR_EYE_RESOLUTION_SCALE_ENV);
+	if (requested_scale == NULL) {
+		requested_scale = "1.00";
+	}
+
+	char title[sizeof(cwm->current_title)];
+	const char *base_title = cwm->base_title[0] != '\0' ? cwm->base_title : "Monado";
+	(void)snprintf(title, sizeof(title),
+	               "%s | preset %s @ %sx | internal eye %ux%u | window %ux%u | preview eye %ux%u %.2fx",
+	               base_title, preset, requested_scale, title_eye_width, title_eye_height, ct->width, ct->height,
+	               preview_eye_width, content_height, scale);
+
+	if (strcmp(cwm->current_title, title) != 0) {
+		strncpy(cwm->current_title, title, sizeof(cwm->current_title) - 1);
+		cwm->current_title[sizeof(cwm->current_title) - 1] = '\0';
+		set_window_title_utf8(cwm->window, cwm->current_title);
+	}
+}
+
 static void
 comp_window_mswin_destroy(struct comp_target *ct)
 {
@@ -133,7 +352,13 @@ comp_window_mswin_destroy(struct comp_target *ct)
 static void
 comp_window_mswin_update_window_title(struct comp_target *ct, const char *title)
 {
-	//! @todo
+	struct comp_window_mswin *cwm = (struct comp_window_mswin *)ct;
+	if (title != NULL && title[0] != '\0') {
+		strncpy(cwm->base_title, title, sizeof(cwm->base_title) - 1);
+		cwm->base_title[sizeof(cwm->base_title) - 1] = '\0';
+	}
+
+	comp_window_mswin_refresh_title(cwm);
 }
 
 static void
@@ -192,7 +417,8 @@ comp_window_mswin_init_swapchain(struct comp_target *ct, uint32_t width, uint32_
 static void
 comp_window_mswin_flush(struct comp_target *ct)
 {
-	//! @todo
+	struct comp_window_mswin *cwm = (struct comp_window_mswin *)ct;
+	comp_window_mswin_refresh_title(cwm);
 }
 
 static void
@@ -383,6 +609,7 @@ comp_window_mswin_create(struct comp_compositor *c)
 	comp_target_swapchain_init_and_set_fnptrs(&w->base, COMP_TARGET_FORCE_FAKE_DISPLAY_TIMING);
 
 	w->base.base.name = "MS Windows";
+	(void)snprintf(w->base_title, sizeof(w->base_title), "%s", "Monado (Windowed)");
 	w->base.display = VK_NULL_HANDLE;
 	w->base.base.destroy = comp_window_mswin_destroy;
 	w->base.base.flush = comp_window_mswin_flush;
