@@ -260,6 +260,8 @@ struct pssense_device
 		bool led_sync_sample_needs_marking;
 		bool led_sync_sample_needs_sending;
 		struct t_led_sync_sample latest_led_sync_sample;
+
+		struct xrt_pose T_led_imu;
 	} tracking;
 
 	enum
@@ -1337,12 +1339,10 @@ pssense_get_tracked_pose(struct xrt_device *xdev,
 	struct xrt_relation_chain xrc = {0};
 	struct xrt_pose pose_correction = XRT_POSE_IDENTITY;
 
+	// If we aren't using constellation tracking, rotate the IMU orientation so that it's facing the same direction
+	// as the LED model is facing
 	if (!pssense->tracking.use_constellation) {
-		// Rotate the grip/aim pose up by 60 degrees around the X axis if we're using IMU fusion, since the IMU
-		// is mounted weirdly. We don't presently have an IMU->constellation offset, but this at least makes
-		// both modes usable
-		struct xrt_vec3 axis = XRT_VEC3_UNIT_X;
-		math_quat_from_angle_vector(DEG_TO_RAD(60), &axis, &pose_correction.orientation);
+		pose_correction.orientation = pssense->tracking.T_led_imu.orientation;
 	}
 
 	m_relation_chain_push_pose(&xrc, &pose_correction);
@@ -1453,18 +1453,36 @@ pssense_create(struct xrt_prober *xp,
 	pssense->log_level = debug_get_log_option_pssense_log();
 	pssense->hid = hid;
 
+	// Initialize the IMU orientation to be correct
+	struct xrt_quat imu_orientation_quat = {
+	    .x = sinf(pssense_imu_angle * 0.5f),
+	    .y = 0,
+	    .z = 0,
+	    .w = cosf(pssense_imu_angle * 0.5f),
+	};
+
 	if (xpdev->product_id == PSSENSE_PID_LEFT) {
 		pssense->base.device_type = XRT_DEVICE_TYPE_LEFT_HAND_CONTROLLER;
 		pssense->hand = PSSENSE_HAND_LEFT;
 
 		pssense->led_model.leds = pssense_left_leds;
 		pssense->led_model.led_count = ARRAY_SIZE(pssense_left_leds);
+
+		pssense->tracking.T_led_imu = (struct xrt_pose){
+		    .orientation = imu_orientation_quat,
+		    .position = T_led_imu_left,
+		};
 	} else if (xpdev->product_id == PSSENSE_PID_RIGHT) {
 		pssense->base.device_type = XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER;
 		pssense->hand = PSSENSE_HAND_RIGHT;
 
 		pssense->led_model.leds = pssense_right_leds;
 		pssense->led_model.led_count = ARRAY_SIZE(pssense_right_leds);
+
+		pssense->tracking.T_led_imu = (struct xrt_pose){
+		    .orientation = imu_orientation_quat,
+		    .position = T_led_imu_right,
+		};
 	} else {
 		PSSENSE_ERROR(pssense, "Unable to determine controller type");
 		pssense_device_destroy(&pssense->base);
