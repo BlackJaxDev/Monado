@@ -458,6 +458,9 @@ Camera::SlowSampleProcess(CameraSample &sample)
 
 			// We found a pose for this device in this sample
 			device_state->needs_slow_processing = false;
+		} else {
+			CT_TRACE(tracker, "Camera %p slow processing for device %d failed to find a pose", (void *)this,
+			         device->id);
 		}
 	}
 
