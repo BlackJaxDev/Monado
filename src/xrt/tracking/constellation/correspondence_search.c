@@ -352,6 +352,34 @@ check_led_against_model_subset(struct correspondence_search *cs,
 
 	cs->num_trials++;
 
+#if 0 // enable this code to be able to trigger a log if a checked pose contains a set of wanted LED->Blob associations.
+	struct
+	{
+		uint32_t blob_id;
+		t_constellation_led_id_it led_id;
+	} matches[] = {
+	    {.blob_id = 177664, .led_id = 3}, {.blob_id = 173642, .led_id = 2}, {.blob_id = 183320, .led_id = 1},
+	    {.blob_id = 176870, .led_id = 0}, {.blob_id = 183198, .led_id = 6}, /* {.blob_id = 183198, .led_id = 7}, */
+	};
+
+	uint32_t matched = 0;
+	for (int i = 0; i < ARRAY_SIZE(matches); i++) {
+		for (int j = 0; j < 4; j++) {
+			if (matches[i].blob_id == blobs[j]->blob->blob_id && matches[i].led_id == model_leds[j]->id) {
+				matched++;
+				break;
+			}
+		}
+	}
+
+	if (matched >= 4) {
+		CS_FULL_DEBUG(cs, "Hit triggered!!! model %d hit check for LED %d %d %d (%d) and blob %d %d %d (%d)", mi->id,
+		              model_leds[0]->id, model_leds[1]->id, model_leds[2]->id, model_leds[3]->id,
+		              blobs[0]->blob->blob_id, blobs[1]->blob->blob_id, blobs[2]->blob->blob_id,
+		              blobs[3]->blob->blob_id);
+	}
+#endif
+
 	for (int i = 0; i < 3; i++) {
 		x[i][0] = model_leds[i]->position.x;
 		x[i][1] = model_leds[i]->position.y;
@@ -363,6 +391,10 @@ check_led_against_model_subset(struct correspondence_search *cs,
 	int valid = lambdatwist_p3p(y1, y2, y3, x[0], x[1], x[2], Rs, Ts);
 
 	if (!valid) {
+		CS_FULL_DEBUG(
+		    cs, "model %d failed to find a valid P3P solution for LED %d %d %d (%d) and blob %d %d %d (%d)",
+		    mi->id, model_leds[0]->id, model_leds[1]->id, model_leds[2]->id, model_leds[3]->id,
+		    blobs[0]->blob->blob_id, blobs[1]->blob->blob_id, blobs[2]->blob->blob_id, blobs[3]->blob->blob_id);
 		return;
 	}
 
@@ -379,6 +411,13 @@ check_led_against_model_subset(struct correspondence_search *cs,
 		pose.position.z = Ts[i][2];
 
 		if (pose.position.z < 0.05 || pose.position.z > 15) {
+			CS_FULL_DEBUG(cs,
+			              "model %d failed to find a valid P3P solution for LED %d %d %d (%d) and blob %d "
+			              "%d %d (%d) - pose out of range Z @ %f metres",
+			              mi->id, model_leds[0]->id, model_leds[1]->id, model_leds[2]->id,
+			              model_leds[3]->id, blobs[0]->blob->blob_id, blobs[1]->blob->blob_id,
+			              blobs[2]->blob->blob_id, blobs[3]->blob->blob_id, pose.position.z);
+
 			// The object is unlikely to be < 5cm or > 15m from the camera
 			continue;
 		}
@@ -410,6 +449,13 @@ check_led_against_model_subset(struct correspondence_search *cs,
 			// Require only that the anchor LED not be actively facing away from the camera
 			// (that it's at worst perpendicular). Controller LEDs can be visible at that angle
 			if (facing_dot > 0.0) {
+				CS_FULL_DEBUG(cs,
+				              "model %d failed to find a valid P3P solution for LED %d %d %d (%d) and "
+				              "blob %d %d %d (%d) - LED not facing camera (dot %f)",
+				              mi->id, model_leds[0]->id, model_leds[1]->id, model_leds[2]->id,
+				              model_leds[3]->id, blobs[0]->blob->blob_id, blobs[1]->blob->blob_id,
+				              blobs[2]->blob->blob_id, blobs[3]->blob->blob_id, facing_dot);
+
 				// LED not facing the camera -> invalid pose
 				checks_failed = true;
 				break;
@@ -483,6 +529,14 @@ check_led_against_model_subset(struct correspondence_search *cs,
 #endif
 		// Check that the 4th point projected to within its blob
 		if (distance <= blobs[3]->max_dist) {
+			CS_FULL_DEBUG(
+			    cs,
+			    "model %d found a valid P3P solution for LED %d %d %d (%d) and blob %d %d %d (%d) - "
+			    "4th point projected within blob (err %f <= %f)",
+			    mi->id, model_leds[0]->id, model_leds[1]->id, model_leds[2]->id, model_leds[3]->id,
+			    blobs[0]->blob->blob_id, blobs[1]->blob->blob_id, blobs[2]->blob->blob_id,
+			    blobs[3]->blob->blob_id, distance, blobs[3]->max_dist);
+
 			if (correspondence_search_project_pose(cs, model, &pose, mi, depth) || 1) {
 #if 0
 				CS_DEBUG(cs,
@@ -495,6 +549,13 @@ check_led_against_model_subset(struct correspondence_search *cs,
 				         xcheck->z, checkblob.x, checkblob.y);
 #endif
 			}
+		} else {
+			CS_FULL_DEBUG(cs,
+			              "model %d failed to find a valid P3P solution for LED %d %d %d (%d) and blob %d "
+			              "%d %d (%d) - 4th point projected outside blob (err %f > %f),",
+			              mi->id, model_leds[0]->id, model_leds[1]->id, model_leds[2]->id,
+			              model_leds[3]->id, blobs[0]->blob->blob_id, blobs[1]->blob->blob_id,
+			              blobs[2]->blob->blob_id, blobs[3]->blob->blob_id, distance, blobs[3]->max_dist);
 		}
 	}
 }
