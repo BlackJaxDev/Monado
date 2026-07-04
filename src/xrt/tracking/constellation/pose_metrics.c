@@ -440,7 +440,7 @@ pose_metrics_evaluate_pose_with_prior(struct pose_metrics *score,
 	} else if (prior_must_match) {
 		// If we must match the prior and failed, bail out
 		goto done;
-	} else if (score->visible_leds > 6 && score->matched_blobs > 6 && error_per_led < 3.0 &&
+	} else if (score->visible_leds > 4 && score->matched_blobs > 4 && error_per_led < 3.0 &&
 	           (score->unmatched_blobs * 4 <= score->matched_blobs ||
 	            (2 * score->visible_leds <= 3 * score->matched_blobs))) {
 		/*
