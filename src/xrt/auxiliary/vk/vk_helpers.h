@@ -406,6 +406,13 @@ XRT_CHECK_RESULT const char *
 vk_format_feature_flag_string(VkFormatFeatureFlagBits bits, bool null_on_unknown);
 
 /*!
+ * Returns the swapchain create flag if one valid bit is set,
+ * if multiple bits are set, will return 'MULTIPLE BIT SET'.
+ */
+XRT_CHECK_RESULT const char *
+vk_swapchain_create_flag_string(VkSwapchainCreateFlagsKHR bits, bool null_on_unknown);
+
+/*!
  * Returns the image usage flag if one valid bit is set,
  * if multiple bits are set, will return 'MULTIPLE BIT SET'.
  */

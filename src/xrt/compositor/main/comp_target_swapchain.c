@@ -795,6 +795,12 @@ comp_target_swapchain_create_images(struct comp_target *ct,
 	    .oldSwapchain = old_swapchain_handle,
 	};
 
+#ifdef VK_KHR_present_id2
+	if (cts->present_id2_supported && vk->features.present_wait) {
+		swapchain_info.flags |= VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR;
+	}
+#endif
+
 	// Print what we are creating.
 	vk_print_swapchain_create_info(vk, &swapchain_info, print_log_level);
 

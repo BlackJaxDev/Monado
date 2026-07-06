@@ -23,6 +23,8 @@ extern "C" {
 
 #define MAX_OBJECT_LEDS 64
 
+#define WORST_REPROJECTION_ERROR 10.0
+
 struct pose_rect
 {
 	double left;

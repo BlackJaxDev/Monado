@@ -175,6 +175,20 @@ DataSerializer::Read(xrt_pose &value)
 	this->Read(value.orientation.w);
 }
 
+// FoundDevicePose
+
+void
+DataSerializer::Write(const FoundDevicePose &value)
+{
+	this->Write(value.Tcv_cam_device);
+}
+
+void
+DataSerializer::Read(FoundDevicePose &value)
+{
+	this->Read(value.Tcv_cam_device);
+}
+
 // DeviceState
 
 void
@@ -183,7 +197,7 @@ DataSerializer::Write(const DeviceState &value)
 	this->Write(static_cast<uint8_t>(value.device_id));
 
 	this->Write(value.Txr_world_device_prior);
-	this->Write(value.Tcv_cam_device_found);
+	this->Write(value.found_pose);
 }
 
 void
@@ -194,7 +208,7 @@ DataSerializer::Read(DeviceState &value)
 	value.device_id = static_cast<t_constellation_device_id_t>(device_id);
 
 	this->Read(value.Txr_world_device_prior);
-	this->Read(value.Tcv_cam_device_found);
+	this->Read(value.found_pose);
 }
 
 // t_blob

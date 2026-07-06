@@ -55,6 +55,11 @@ public: // Methods
 	Read(xrt_pose &value);
 
 	void
+	Write(const FoundDevicePose &value);
+	void
+	Read(FoundDevicePose &value);
+
+	void
 	Write(const DeviceState &value);
 	void
 	Read(DeviceState &value);

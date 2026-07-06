@@ -84,7 +84,7 @@ public: // Fields
 	uint16_t sample_index{0};
 	u_var_draggable_u16 draggable_sample_index;
 	bool slow{true};
-	bool wipe_blob_associations{false};
+	bool wipe_blob_associations{true};
 	u_var_button play_sample_button;
 
 public: // Methods

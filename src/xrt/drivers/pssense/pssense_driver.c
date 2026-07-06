@@ -145,6 +145,18 @@ enum pssense_input_index
 };
 
 /*!
+ * Parsed calibration data from the PlayStation Sense controller.
+ */
+struct pssense_parsed_calibration
+{
+	struct xrt_vec3 gyro_scale;
+	struct xrt_vec3 accel_scale;
+
+	struct xrt_vec3 accel_bias;
+	struct xrt_vec3_i32 gyro_bias;
+};
+
+/*!
  * PlayStation Sense state parsed from a data packet.
  */
 struct pssense_input_state
@@ -227,8 +239,6 @@ struct pssense_device
 		uint64_t device_ticks_total;
 
 		uint32_t last_sent_host_timestamp_us;
-
-		time_duration_ns smoothed_clock_jitter_ns;
 	} timing;
 
 	struct
@@ -260,17 +270,18 @@ struct pssense_device
 		bool led_sync_sample_needs_marking;
 		bool led_sync_sample_needs_sending;
 		struct t_led_sync_sample latest_led_sync_sample;
+
+		struct xrt_pose T_led_imu;
 	} tracking;
 
-	enum
-	{
-		PSSENSE_HAND_LEFT,
-		PSSENSE_HAND_RIGHT
-	} hand;
+	enum xrt_hand hand;
 
 	enum u_logging_level log_level;
 
 	struct os_precise_sleeper sleeper;
+
+	struct pssense_parsed_calibration calibration;
+	bool has_calibration;
 
 	//! Input state parsed from most recent packet
 	struct pssense_input_state state;
@@ -382,6 +393,9 @@ pssense_add_clock_offset_sample(struct pssense_device *pssense, double offset_ns
 		delta = CLAMP(delta, -2500.0, 2500.0);
 
 		pssense->timing.filtered_offset_ns += delta;
+
+		t_led_sync_push_host_device_clock_offset(&pssense->tracking.led_sync_refinement,
+		                                         (time_duration_ns)(pssense->timing.filtered_offset_ns));
 	}
 	pssense->timing.last_clock_sample_ns = os_monotonic_get_ns();
 }
@@ -395,12 +409,21 @@ pssense_host_ts_to_device(struct pssense_device *pssense,
 		return false;
 	}
 
-	// Convert host-domain query time to device IMU time using the PSVR2TK clock offset and the LED sync latency
-	// offset. Corresponds to the inverse of PSVR2TK's libpad_deviceToHostHook conversion. See:
-	// PSVR2Toolkit/projects/psvr2_openvr_driver_ex/libpad_hooks.cpp
-	*out_device_timestamp_ns = host_timestamp_ns + (timepoint_ns)(pssense->timing.filtered_offset_ns) +
-	                           pssense->tracking.latest_led_sync_sample.device_host_latency_ns;
-	return true;
+	switch (pssense->tracking.latest_led_sync_sample.timestamp_mode) {
+	case T_LED_SYNC_SAMPLE_TIMESTAMP_MODE_INVALID:
+	case T_LED_SYNC_SAMPLE_TIMESTAMP_MODE_DEVICE_HOST_LATENCY: {
+		*out_device_timestamp_ns = host_timestamp_ns + (timepoint_ns)(pssense->timing.filtered_offset_ns) +
+		                           pssense->tracking.latest_led_sync_sample.timestamp.device_host_latency_ns;
+		return true;
+	}
+	case T_LED_SYNC_SAMPLE_TIMESTAMP_MODE_HOST_DEVICE_CLOCK_OFFSET: {
+		*out_device_timestamp_ns =
+		    host_timestamp_ns + pssense->tracking.latest_led_sync_sample.timestamp.host_device_clock_offset_ns;
+		return true;
+	}
+	}
+
+	return false;
 }
 
 /*!
@@ -435,17 +458,22 @@ pssense_read_packet_data(struct pssense_device *pssense, uint8_t *buffer, size_t
 static void
 pssense_update_fusion(struct pssense_device *pssense)
 {
-	struct xrt_vec3 gyro;
-	gyro.x = DEG_TO_RAD(pssense->state.gyro_raw.x * PSSENSE_GYRO_SCALE_DEG);
-	gyro.y = DEG_TO_RAD(pssense->state.gyro_raw.y * PSSENSE_GYRO_SCALE_DEG);
-	gyro.z = DEG_TO_RAD(pssense->state.gyro_raw.z * PSSENSE_GYRO_SCALE_DEG);
+	// We don't have calibration yet, so we can't do anything
+	if (!pssense->has_calibration) {
+		return;
+	}
 
-	struct xrt_vec3 accel;
-	accel.x = pssense->state.accel_raw.x * PSSENSE_ACCEL_SCALE;
-	accel.y = pssense->state.accel_raw.y * PSSENSE_ACCEL_SCALE;
-	accel.z = pssense->state.accel_raw.z * PSSENSE_ACCEL_SCALE;
+	struct xrt_vec3 gyro = {
+	    .x = (pssense->state.gyro_raw.x - pssense->calibration.gyro_bias.x) * pssense->calibration.gyro_scale.x,
+	    .y = (pssense->state.gyro_raw.y - pssense->calibration.gyro_bias.y) * pssense->calibration.gyro_scale.y,
+	    .z = (pssense->state.gyro_raw.z - pssense->calibration.gyro_bias.z) * pssense->calibration.gyro_scale.z,
+	};
 
-	// TODO: Apply correction from calibration data
+	struct xrt_vec3 accel = {
+	    .x = (pssense->state.accel_raw.x - pssense->calibration.accel_bias.x) * pssense->calibration.accel_scale.x,
+	    .y = (pssense->state.accel_raw.y - pssense->calibration.accel_bias.y) * pssense->calibration.accel_scale.y,
+	    .z = (pssense->state.accel_raw.z - pssense->calibration.accel_bias.z) * pssense->calibration.accel_scale.z,
+	};
 
 	m_imu_3dof_update(&pssense->tracking.fusion, pssense->timing.latest_imu_time_ns, &accel, &gyro);
 	pssense->tracking.pose.orientation = pssense->tracking.fusion.rot;
@@ -518,7 +546,7 @@ pssense_handle_read(struct pssense_device *pssense)
 	input.thumbstick.y = (data.thumbstick_y - 128) / -128.0f;
 	input.thumbstick_touch = (data.buttons[2] & 4) != 0;
 
-	if (pssense->hand == PSSENSE_HAND_LEFT) {
+	if (pssense->hand == XRT_HAND_LEFT) {
 		input.share_click = (data.buttons[1] & 1) != 0;
 		input.square_click = (data.buttons[0] & 1) != 0;
 		input.square_touch = (data.buttons[2] & 2) != 0;
@@ -527,7 +555,7 @@ pssense_handle_read(struct pssense_device *pssense)
 		input.squeeze_click = (data.buttons[0] & 16) != 0;
 		input.trigger_click = (data.buttons[0] & 64) != 0;
 		input.thumbstick_click = (data.buttons[1] & 4) != 0;
-	} else if (pssense->hand == PSSENSE_HAND_RIGHT) {
+	} else if (pssense->hand == XRT_HAND_RIGHT) {
 		input.options_click = (data.buttons[1] & 2) != 0;
 		input.cross_click = (data.buttons[0] & 2) != 0;
 		input.cross_touch = (data.buttons[2] & 2) != 0;
@@ -823,13 +851,71 @@ pssense_get_constellation_pose(struct pssense_device *pssense,
 	m_relation_history_get(pssense->tracking.constellation_relation_history, device_ts, out_relation);
 }
 
+static void
+parse_pssense_calibration(const struct pssense_calibration_data *calibration_data,
+                          struct pssense_parsed_calibration *out_parsed)
+{
+	const float rad_per_sec_ref = M_PI * 3.f;
+
+	int16_t gyro_plus_x = __le16_to_cpu(calibration_data->gyro_plus_x);
+	int16_t gyro_minus_x = __le16_to_cpu(calibration_data->gyro_minus_x);
+	int16_t gyro_plus_y = __le16_to_cpu(calibration_data->gyro_plus_y);
+	int16_t gyro_minus_y = __le16_to_cpu(calibration_data->gyro_minus_y);
+	int16_t gyro_plus_z = __le16_to_cpu(calibration_data->gyro_plus_z);
+	int16_t gyro_minus_z = __le16_to_cpu(calibration_data->gyro_minus_z);
+
+	int16_t accel_plus_x = __le16_to_cpu(calibration_data->accel_plus_x);
+	int16_t accel_minus_x = __le16_to_cpu(calibration_data->accel_minus_x);
+	int16_t accel_plus_y = __le16_to_cpu(calibration_data->accel_plus_y);
+	int16_t accel_minus_y = __le16_to_cpu(calibration_data->accel_minus_y);
+	int16_t accel_plus_z = __le16_to_cpu(calibration_data->accel_plus_z);
+	int16_t accel_minus_z = __le16_to_cpu(calibration_data->accel_minus_z);
+
+	struct xrt_vec3_i32 gyro_bias = {
+	    .x = (int16_t)__le16_to_cpu(calibration_data->gyro_bias_x),
+	    .y = (int16_t)__le16_to_cpu(calibration_data->gyro_bias_y),
+	    .z = (int16_t)__le16_to_cpu(calibration_data->gyro_bias_z),
+	};
+
+	float gyro_span_x =
+	    (fabsf((float)gyro_plus_x - (float)gyro_bias.x) + fabsf((float)gyro_minus_x - (float)gyro_bias.x)) / 2.0f;
+	float gyro_span_y =
+	    (fabsf((float)gyro_plus_y - (float)gyro_bias.y) + fabsf((float)gyro_minus_y - (float)gyro_bias.y)) / 2.0f;
+	float gyro_span_z =
+	    (fabsf((float)gyro_plus_z - (float)gyro_bias.z) + fabsf((float)gyro_minus_z - (float)gyro_bias.z)) / 2.0f;
+
+	struct xrt_vec3 gyro_scale = {
+	    .x = rad_per_sec_ref / gyro_span_x,
+	    .y = rad_per_sec_ref / gyro_span_y,
+	    .z = rad_per_sec_ref / gyro_span_z,
+	};
+
+	struct xrt_vec3 accel_bias = {
+	    .x = (accel_plus_x + accel_minus_x) / 2.0f,
+	    .y = (accel_plus_y + accel_minus_y) / 2.0f,
+	    .z = (accel_plus_z + accel_minus_z) / 2.0f,
+	};
+
+	struct xrt_vec3 accel_scale = {
+	    .x = (1.0f / (float)(accel_plus_x - accel_bias.x)) * MATH_GRAVITY_M_S2,
+	    .y = (1.0f / (float)(accel_plus_y - accel_bias.y)) * MATH_GRAVITY_M_S2,
+	    .z = (1.0f / (float)(accel_plus_z - accel_bias.z)) * MATH_GRAVITY_M_S2,
+	};
+
+	(*out_parsed) = XRT_C11_COMPOUND(struct pssense_parsed_calibration){
+	    .gyro_bias = gyro_bias,
+	    .gyro_scale = gyro_scale,
+	    .accel_scale = accel_scale,
+	};
+}
+
 /*!
  * Retrieving the calibration data report will switch the Sense controller from compat mode into full mode.
  */
-bool
+static bool
 pssense_get_calibration_data(struct pssense_device *pssense)
 {
-	uint8_t calibration_data[CALIBRATION_DATA_LENGTH] = {0};
+	struct pssense_calibration_data calibration_data = {0};
 
 	bool invalid_crc;
 	do {
@@ -855,11 +941,11 @@ pssense_get_calibration_data(struct pssense_device *pssense)
 
 			switch (report_buffer.part_id) {
 			case CALIBRATION_DATA_PART_ID_1: {
-				memcpy(calibration_data, report_buffer.data, sizeof(report_buffer.data));
+				memcpy((uint8_t *)&calibration_data, report_buffer.data, sizeof(report_buffer.data));
 				break;
 			}
 			case CALIBRATION_DATA_PART_ID_2: {
-				memcpy(calibration_data + sizeof(report_buffer.data), report_buffer.data,
+				memcpy(((uint8_t *)&calibration_data) + sizeof(report_buffer.data), report_buffer.data,
 				       sizeof(report_buffer.data));
 				break;
 			}
@@ -881,7 +967,10 @@ pssense_get_calibration_data(struct pssense_device *pssense)
 		}
 	} while (invalid_crc);
 
-	// TODO: Parse calibration data into prefiler
+	parse_pssense_calibration(&calibration_data, &pssense->calibration);
+	pssense->has_calibration = true;
+
+	PSSENSE_DEBUG(pssense, "Calibration data retrieved and parsed successfully");
 
 	return true;
 }
@@ -1006,35 +1095,17 @@ pssense_timing_event_sink_push(struct t_timing_event_sink *sink, const struct t_
 		(void)ts_valid; // Silence unused variable in release
 
 		next_blink_time += (int64_t)pssense->tracking.timing_fudge_100us * 100 * U_TIME_1US_IN_NS;
-		// Apply the fudge offset, which will line up the blink center with exposure center'
+		// Apply the fudge offset, which will line up the blink center with exposure center
 		next_blink_time += (int64_t)pssense->tracking.latest_led_sync_sample.fudge_offset_ns;
 
-		// PSSENSE cycle position is the *center* of the exposure, but our LED sync assumes it's the start of
-		// the exposure, so we need to offset
+		// PSSENSE cycle position on the wire is the *center* of the exposure, but our LED sync assumes it's the
+		// start of the exposure, so we need to make it blink later to account
 		next_blink_time += PERIOD_ID_TO_DURATION_NS(period_id) / 2;
 
 		// inside thirds of a nanosecond
 		uint32_t cycle_length = pssense->tracking.average_exposure_interval_ns * 3;
 		// in IMU ticks
 		uint32_t cycle_position = NS_TO_IMU_TICKS(next_blink_time);
-
-		uint32_t last_cycle_position = __le32_to_cpu(pssense->tracking.led_settings.cycle_position);
-		if (cycle_position != last_cycle_position) {
-			int64_t jitter = (IMU_TICKS_TO_NS(((int64_t)cycle_position - last_cycle_position))) -
-			                 (int64_t)pssense->tracking.average_exposure_interval_ns;
-
-			if (jitter < (U_TIME_1MS_IN_NS * 3LL) && jitter > -(U_TIME_1MS_IN_NS * 3LL)) {
-				pssense->timing.smoothed_clock_jitter_ns =
-				    ((pssense->timing.smoothed_clock_jitter_ns * 0.9) + (abs((int)jitter) * 0.1));
-
-				time_duration_ns new_minimum_blink_time =
-				    PERIOD_ID_TO_DURATION_NS(STABLE_MIN_PERIOD_ID) +
-				    (int64_t)(pssense->timing.smoothed_clock_jitter_ns * 2);
-
-				t_led_sync_update_minimum_blink_time(&pssense->tracking.led_sync_refinement,
-				                                     new_minimum_blink_time);
-			}
-		}
 
 #if 0
 		static int64_t jitter_integration = 0;
@@ -1057,7 +1128,7 @@ pssense_timing_event_sink_push(struct t_timing_event_sink *sink, const struct t_
 		    .period_id = period_id,
 		};
 
-		if (pssense->tracking.increment_sequence_num && (pssense->tracking.received_frames % 50) == 0) {
+		if (pssense->tracking.increment_sequence_num) {
 			pssense->tracking.led_sequence_num += 1;
 #if 0
 			PSSENSE_DEBUG(pssense, "%lu\t%lu",
@@ -1337,12 +1408,10 @@ pssense_get_tracked_pose(struct xrt_device *xdev,
 	struct xrt_relation_chain xrc = {0};
 	struct xrt_pose pose_correction = XRT_POSE_IDENTITY;
 
+	// If we aren't using constellation tracking, rotate the IMU orientation so that it's facing the same direction
+	// as the LED model is facing
 	if (!pssense->tracking.use_constellation) {
-		// Rotate the grip/aim pose up by 60 degrees around the X axis if we're using IMU fusion, since the IMU
-		// is mounted weirdly. We don't presently have an IMU->constellation offset, but this at least makes
-		// both modes usable
-		struct xrt_vec3 axis = XRT_VEC3_UNIT_X;
-		math_quat_from_angle_vector(DEG_TO_RAD(60), &axis, &pose_correction.orientation);
+		pose_correction.orientation = pssense->tracking.T_led_imu.orientation;
 	}
 
 	m_relation_chain_push_pose(&xrc, &pose_correction);
@@ -1453,18 +1522,36 @@ pssense_create(struct xrt_prober *xp,
 	pssense->log_level = debug_get_log_option_pssense_log();
 	pssense->hid = hid;
 
+	// Initialize the IMU orientation to be correct
+	struct xrt_quat imu_orientation_quat = {
+	    .x = sinf(pssense_imu_angle * 0.5f),
+	    .y = 0,
+	    .z = 0,
+	    .w = cosf(pssense_imu_angle * 0.5f),
+	};
+
 	if (xpdev->product_id == PSSENSE_PID_LEFT) {
 		pssense->base.device_type = XRT_DEVICE_TYPE_LEFT_HAND_CONTROLLER;
-		pssense->hand = PSSENSE_HAND_LEFT;
+		pssense->hand = XRT_HAND_LEFT;
 
 		pssense->led_model.leds = pssense_left_leds;
 		pssense->led_model.led_count = ARRAY_SIZE(pssense_left_leds);
+
+		pssense->tracking.T_led_imu = (struct xrt_pose){
+		    .orientation = imu_orientation_quat,
+		    .position = T_led_imu_left,
+		};
 	} else if (xpdev->product_id == PSSENSE_PID_RIGHT) {
 		pssense->base.device_type = XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER;
-		pssense->hand = PSSENSE_HAND_RIGHT;
+		pssense->hand = XRT_HAND_RIGHT;
 
 		pssense->led_model.leds = pssense_right_leds;
 		pssense->led_model.led_count = ARRAY_SIZE(pssense_right_leds);
+
+		pssense->tracking.T_led_imu = (struct xrt_pose){
+		    .orientation = imu_orientation_quat,
+		    .position = T_led_imu_right,
+		};
 	} else {
 		PSSENSE_ERROR(pssense, "Unable to determine controller type");
 		pssense_device_destroy(&pssense->base);
@@ -1509,22 +1596,27 @@ pssense_create(struct xrt_prober *xp,
 		return NULL;
 	}
 
-	pssense->tracking.period_id = 32;
+	// @note We don't do blink duration refinement right now because that needs to eventually adjust the latency
+	//       offset as it goes and produces a worse result with the current implementation.
 	struct t_led_sync_refinement_options led_sync_refinement_options = {
-	    .flags = T_LED_SYNC_REFINEMENT_FLAGS_BLINK_DURATION,
-	    .initial_blink_duration_ns = PERIOD_ID_TO_DURATION_NS(pssense->tracking.period_id),
-	    .min_blink_duration_ns = PERIOD_ID_TO_DURATION_NS(STABLE_MIN_PERIOD_ID),
+	    // @todo Once LED blink refinement is fixed, enable that again
+	    .flags = T_LED_SYNC_REFINEMENT_FLAGS_OPTICAL_DRIVEN_OFFSET | T_LED_SYNC_REFINEMENT_FLAGS_HAS_LATENCY_CAP,
+	    .initial_blink_duration_ns = PERIOD_ID_TO_DURATION_NS(9),
+	    .min_blink_duration_ns = PERIOD_ID_TO_DURATION_NS(1),
 	    .max_blink_duration_ns = PERIOD_ID_TO_DURATION_NS(MAX_PERIOD_ID),
 	    .time_to_resync_ns = T_LED_SYNC_DEFAULT_RESYNC_TIME,
-	    .settle_frames = 10,
+	    .settle_frames = 7,
+	    // 8ms latency cap, something a bit overboard for bluetooth but better than searching the whole range
+	    .latency_cap_ns = U_TIME_1MS_IN_NS * 8LL,
 	};
-	pssense->tracking.period_id = DURATION_NS_TO_PERIOD_ID(led_sync_refinement_options.initial_blink_duration_ns);
 	ret = t_led_sync_refinement_init(&pssense->tracking.led_sync_refinement, &led_sync_refinement_options);
 	if (ret != 0) {
 		PSSENSE_ERROR(pssense, "Failed to init LED sync refinement!");
 		pssense_device_destroy(&pssense->base);
 		return NULL;
 	}
+
+	pssense->tracking.period_id = DURATION_NS_TO_PERIOD_ID(led_sync_refinement_options.initial_blink_duration_ns);
 
 	ret = os_thread_helper_init(&pssense->controller_thread);
 	if (ret != 0) {
@@ -1551,13 +1643,13 @@ pssense_create(struct xrt_prober *xp,
 
 	u_var_add_gui_header(pssense, &pssense->gui.button_states, "Button States");
 	u_var_add_bool(pssense, &pssense->state.ps_click, "PS Click");
-	if (pssense->hand == PSSENSE_HAND_LEFT) {
+	if (pssense->hand == XRT_HAND_LEFT) {
 		u_var_add_bool(pssense, &pssense->state.share_click, "Share Click");
 		u_var_add_bool(pssense, &pssense->state.square_click, "Square Click");
 		u_var_add_bool(pssense, &pssense->state.square_touch, "Square Touch");
 		u_var_add_bool(pssense, &pssense->state.triangle_click, "Triangle Click");
 		u_var_add_bool(pssense, &pssense->state.triangle_touch, "Triangle Touch");
-	} else if (pssense->hand == PSSENSE_HAND_RIGHT) {
+	} else if (pssense->hand == XRT_HAND_RIGHT) {
 		u_var_add_bool(pssense, &pssense->state.options_click, "Options Click");
 		u_var_add_bool(pssense, &pssense->state.cross_click, "Cross Click");
 		u_var_add_bool(pssense, &pssense->state.cross_touch, "Cross Touch");
@@ -1583,11 +1675,15 @@ pssense_create(struct xrt_prober *xp,
 	u_var_add_ro_u64(pssense, &pssense->timing.imu_ticks_total, "Latest IMU Time (ticks)");
 	u_var_add_ro_i64_ns(pssense, &pssense->timing.latest_device_time_ns, "Latest Device Time (ns)");
 	u_var_add_ro_u64(pssense, &pssense->timing.device_ticks_total, "Latest Device Time (ticks)");
-	u_var_add_ro_i64_ns(pssense, &pssense->timing.smoothed_clock_jitter_ns, "Smoothed Clock Jitter (ns)");
 
 	u_var_add_gui_header(pssense, &pssense->gui.tracking, "Tracking");
 	u_var_add_ro_vec3_i32(pssense, &pssense->state.gyro_raw, "Raw Gyro");
 	u_var_add_ro_vec3_i32(pssense, &pssense->state.accel_raw, "Raw Accel");
+	u_var_add_bool(pssense, &pssense->has_calibration, "Has Calibration");
+	u_var_add_ro_vec3_i32(pssense, &pssense->calibration.gyro_bias, "Gyro Bias");
+	u_var_add_ro_vec3_f32(pssense, &pssense->calibration.gyro_scale, "Gyro Scale");
+	u_var_add_ro_vec3_f32(pssense, &pssense->calibration.accel_bias, "Accel Bias");
+	u_var_add_ro_vec3_f32(pssense, &pssense->calibration.accel_scale, "Accel Scale");
 	u_var_add_pose(pssense, &pssense->tracking.pose, "Pose");
 	m_imu_3dof_add_vars(&pssense->tracking.fusion, pssense, "3dof Fusion");
 	u_var_add_ro_u32(pssense, &pssense->tracking.received_frames, "Received Frames");

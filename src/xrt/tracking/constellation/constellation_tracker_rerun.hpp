@@ -34,45 +34,35 @@ public: // Methods
 		stream = std::make_unique<rerun::RecordingStream>(rerun_recording_id);
 	}
 
-	/*! Log a tracked frame to Rerun.
+	/*!
+	 * Log a camera sample to rerun.
 	 *
-	 * All pose parameters must be in OpenXR coordinate space (Y-up). They will be converted to OpenCV space
-	 * (Y-down) internally for logging.
+	 * @remarks Call with `tracker->device_lock` held.
 	 *
-	 * @param camera_sample Camera frame with blobs
-	 * @param device_id Device being tracked
-	 * @param led_model LED model in device-local OpenCV space
-	 * @param calibration Camera intrinsics
-	 * @param Txr_world_cam World → Camera pose (OpenXR space)
-	 * @param Txr_cam_device Camera → Device pose (OpenXR space)
-	 * @param Txr_world_device World → Device pose (OpenXR space)
-	 * @param brightness Average brightness of matched blobs
+	 * @param tracker       The constellation tracker.
+	 * @param camera_sample The camera sample to log.
 	 */
 	void
-	LogTrackedFrame(const CameraSample &camera_sample,
-	                t_constellation_device_id_t device_id,
-	                const t_constellation_tracker_led_model &led_model,
-	                const t_camera_calibration &calibration,
-	                const xrt_pose &Txr_world_cam,
-	                const xrt_pose &Txr_cam_device,
-	                const xrt_pose &Txr_world_device,
-	                float brightness);
+	LogSample(const ConstellationTracker &tracker, const CameraSample &camera_sample);
 
 private: // Methods
 	void
 	LogStaticScene(const CameraSample &camera_sample, const t_camera_calibration &calibration);
 
 	void
-	LogLedModel(const std::string &entity_name, const t_constellation_tracker_led_model &led_model);
+	LogLedModel(const std::string &entity_name,
+	            t_constellation_device_id_t device_id,
+	            const t_constellation_tracker_led_model &led_model,
+	            bool prior);
 
 	void
-	LogBlobSet(const std::string &entity_name,
-	           const CameraSample &camera_sample,
-	           t_constellation_device_id_t device_id,
-	           bool matched_only);
+	LogBlobSet(const CameraSample &camera_sample);
 
 	void
-	LogFrameMetrics(const CameraSample &camera_sample, t_constellation_device_id_t device_id, float brightness);
+	LogFrameCameraMetrics(const CameraSample &camera_sample);
+
+	void
+	LogFrameDeviceMetrics(const CameraSample &camera_sample, const DeviceState &device_state);
 };
 
 }; // namespace xrt::tracking::constellation
