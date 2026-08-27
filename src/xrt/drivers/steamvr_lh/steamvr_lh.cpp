@@ -13,6 +13,7 @@
 
 #include "interfaces/context.hpp"
 
+#include "b_body_tracker.h"
 #include "b_hand_tracker.h"
 
 #include "util/u_var.h"
@@ -41,7 +42,6 @@
 #include <string_view>
 #include <filesystem>
 #include <istream>
-#include <thread>
 
 namespace {
 
@@ -88,6 +88,7 @@ namespace {
 DEBUG_GET_ONCE_LOG_OPTION(lh_log, "LIGHTHOUSE_LOG", U_LOGGING_INFO)
 DEBUG_GET_ONCE_BOOL_OPTION(lh_load_slimevr, "LH_LOAD_SLIMEVR", false)
 DEBUG_GET_ONCE_NUM_OPTION(lh_discover_wait_ms, "LH_DISCOVER_WAIT_MS", 3000)
+DEBUG_GET_ONCE_FLOAT_OPTION(lh_stick_deadzone, "LH_STICK_DEADZONE", 0)
 
 static constexpr size_t MAX_CONTROLLERS = 16;
 
@@ -176,15 +177,31 @@ Context::create(const std::string &steam_install,
 			return nullptr;
 		}
 	}
+	c->frame_thread = std::thread([ctx = c.get()] {
+		while (ctx->frame_thread_run.load()) {
+			using namespace std::chrono_literals;
+			// SteamVR calls `RunFrame()` approximately every 10.1ms
+			const std::chrono::time_point<std::chrono::steady_clock> next =
+			    std::chrono::steady_clock::now() + 10ms;
+			for (vr::IServerTrackedDeviceProvider *const &provider : ctx->providers)
+				provider->RunFrame();
+			ctx->frame_thread_event.try_acquire_until(next);
+		}
+	});
 	return c;
 }
 
 Context::Context(const std::string &steam_install, const std::string &steamvr_install, u_logging_level level)
-    : settings(steam_install, steamvr_install, this), resources(level, steamvr_install), log_level(level)
+    : settings(steam_install, steamvr_install, this), resources(level, steamvr_install), log_level(level),
+      frame_thread_run(true), frame_thread()
 {}
 
 Context::~Context()
 {
+	this->frame_thread_run.store(false);
+	this->frame_thread_event.release();
+	if (this->frame_thread.joinable())
+		this->frame_thread.join();
 	for (vr::IServerTrackedDeviceProvider *const &provider : providers)
 		provider->Cleanup();
 }
@@ -355,26 +372,44 @@ Context::setup_controller(const char *serial, vr::ITrackedDeviceServerDriver *dr
 }
 
 void
-Context::run_frame()
+Context::wait_for_discover()
 {
-	for (vr::IServerTrackedDeviceProvider *const &provider : providers)
-		provider->RunFrame();
+	this->discover_end_time =
+	    std::chrono::steady_clock::now() + std::chrono::milliseconds(debug_get_num_option_lh_discover_wait_ms());
+	while (true) {
+		std::unique_lock lk(this->devices_mut);
+		this->discover_cv.wait_until(lk, this->discover_end_time);
+
+		if (this->discover_end_time <= std::chrono::steady_clock::now())
+			break;
+	}
 }
 
 void
-Context::maybe_run_frame(uint64_t new_frame)
+Context::extend_discover()
 {
-	if (new_frame > current_frame) {
-		++current_frame;
-		run_frame();
-	}
+	this->discover_end_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+	this->discover_cv.notify_all();
 }
+
+
+
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
 bool
 Context::TrackedDeviceAdded(const char *pchDeviceSerialNumber,
                             vr::ETrackedDeviceClass eDeviceClass,
                             vr::ITrackedDeviceServerDriver *pDriver)
 {
+	std::lock_guard lk(this->devices_mut);
+
+	if (!this->in_setup) {
+		// devices appearing after setup are not added to xrt_system_devices and would be leaked on exit
+		CTX_WARN("Cannot add device after setup; consider increasing LH_DISCOVER_WAIT_MS");
+		return false;
+	}
+
+	this->extend_discover();
+
 	CTX_INFO("New device added: %s", pchDeviceSerialNumber);
 	switch (eDeviceClass) {
 	case vr::TrackedDeviceClass_HMD: {
@@ -428,19 +463,26 @@ Context::VsyncEvent(double vsyncTimeOffsetSeconds)
 {}
 
 void
+Context::add_event_locked(vr::VREvent_t event)
+{
+	this->events.emplace_back(std::chrono::steady_clock::now(), event);
+	this->frame_thread_event.try_acquire();
+	this->frame_thread_event.release();
+}
+
+void
 Context::VendorSpecificEvent(uint32_t unWhichDevice,
                              vr::EVREventType eventType,
                              const vr::VREvent_Data_t &eventData,
                              double eventTimeOffset)
 {
 	std::lock_guard lk(event_queue_mut);
-	events.push_back({std::chrono::steady_clock::now(),
-	                  {
-	                      .eventType = eventType,
-	                      .trackedDeviceIndex = unWhichDevice,
-	                      .eventAgeSeconds = {},
-	                      .data = eventData,
-	                  }});
+	this->add_event_locked({
+	    .eventType = eventType,
+	    .trackedDeviceIndex = unWhichDevice,
+	    .eventAgeSeconds = {},
+	    .data = eventData,
+	});
 }
 
 bool
@@ -449,8 +491,8 @@ Context::IsExiting()
 	return false;
 }
 
-void
-Context::add_haptic_event(vr::VREvent_HapticVibration_t event)
+size_t
+Context::add_haptic_event(vr::VREvent_HapticVibration_t event, const size_t old_event_handle)
 {
 	vr::VREvent_t e;
 	e.eventType = vr::EVREventType::VREvent_Input_HapticVibration;
@@ -459,21 +501,36 @@ Context::add_haptic_event(vr::VREvent_HapticVibration_t event)
 	d.hapticVibration = event;
 	e.data = d;
 
-	std::lock_guard lk(event_queue_mut);
-	events.push_back({std::chrono::steady_clock::now(), e});
+	std::unique_lock lk(event_queue_mut);
+	while (events.size() >= 120) { // avoid unbounded allocation if misbehaving apps send too many events at once
+		event_popped.wait(lk);
+	}
+	const size_t old_event_index = old_event_handle - events_tail;
+	if (old_event_index < size_t(events.size())) {
+		vr::VREvent_t *const old_event = &events[old_event_index].inner;
+		if (old_event->eventType == e.eventType &&
+		    old_event->data.hapticVibration.containerHandle == e.data.hapticVibration.containerHandle &&
+		    old_event->data.hapticVibration.componentHandle == e.data.hapticVibration.componentHandle) {
+			old_event->eventType = vr::EVREventType::VREvent_None;
+		}
+	}
+	this->add_event_locked(e);
+	return events_tail + events.size() - 1;
 }
 
 bool
 Context::PollNextEvent(vr::VREvent_t *pEvent, uint32_t uncbVREvent)
 {
-	if (!events.empty()) {
+	std::lock_guard lk(event_queue_mut);
+	while (!events.empty()) {
 		assert(sizeof(vr::VREvent_t) == uncbVREvent);
-		Event e;
-		{
-			std::lock_guard lk(event_queue_mut);
-			e = events.front();
-			events.pop_front();
+		Event e = events.front();
+		events.pop_front();
+		++events_tail;
+		if (e.inner.eventType == vr::EVREventType::VREvent_None) {
+			continue;
 		}
+		event_popped.notify_all();
 		*pEvent = e.inner;
 		using float_sec = std::chrono::duration<float>;
 		float_sec event_age = std::chrono::steady_clock::now() - e.insert_time;
@@ -633,6 +690,28 @@ Context::CreateScalarComponent(vr::PropertyContainerHandle_t ulContainer,
 	return create_component_common(ulContainer, pchName, pHandle);
 }
 
+static struct xrt_vec2
+applyDeadzone(struct xrt_vec2 input)
+{
+	static const float deadzone = [] {
+		float raw = debug_get_float_option_lh_stick_deadzone();
+		// we apply deadzone to the input's absolute value; valid range is 0..1
+		float clamped = CLAMP(raw, 0.0f, 0.99f);
+		if (raw != clamped) {
+			U_LOG_W("LH_STICK_DEADZONE value of %.2f falls outside of expected range 0..1 - clamp to %.2f",
+			        raw, clamped);
+		}
+		return clamped;
+	}();
+
+	if (input.x * input.x + input.y * input.y <= deadzone * deadzone) {
+		input.x = 0.0f;
+		input.y = 0.0f;
+	}
+
+	return input;
+}
+
 vr::EVRInputError
 Context::UpdateScalarComponent(vr::VRInputComponentHandle_t ulComponent, float fNewValue, double fTimeOffset)
 {
@@ -650,6 +729,7 @@ Context::UpdateScalarComponent(vr::VRInputComponentHandle_t ulComponent, float f
 				         "component of its associated input",
 				         ulComponent);
 			}
+			input->value.vec2 = applyDeadzone(input->value.vec2);
 
 		} else {
 			input->value.vec1.x = fNewValue;
@@ -898,6 +978,7 @@ destroy(struct xrt_system_devices *xsysd)
 		xrt_device_destroy(&xsysd->static_xdevs[i]);
 	}
 
+	assert(svrs->ctx.use_count() == 1);
 	svrs->ctx.reset();
 	free(svrs);
 }
@@ -969,16 +1050,7 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
 
 	U_LOG_IFL_I(level, "Lighthouse initialization complete, giving time to setup connected devices...");
 	// RunFrame needs to be called to detect controllers
-	using namespace std::chrono_literals;
-	auto end_time = std::chrono::steady_clock::now() + 1ms * debug_get_num_option_lh_discover_wait_ms();
-	while (true) {
-		svrs->ctx->run_frame();
-		auto cur_time = std::chrono::steady_clock::now();
-		if (cur_time > end_time) {
-			break;
-		}
-		std::this_thread::sleep_for(20ms);
-	}
+	svrs->ctx->wait_for_discover();
 	U_LOG_IFL_I(level, "Device search time complete.");
 
 	if (out_xsysd == NULL || *out_xsysd != NULL) {
@@ -988,7 +1060,11 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
 
 	struct xrt_system_devices *xsysd = &svrs->base;
 
+	std::lock_guard lk(svrs->ctx->devices_mut);
+	svrs->ctx->in_setup = false;
+
 	u_system_devices_populate_function_pointers(xsysd, get_roles, destroy);
+	xsysd->create_body_tracker = b_body_tracker_create;
 	xsysd->create_hand_tracker = b_hand_tracker_create;
 
 	// Include the HMD

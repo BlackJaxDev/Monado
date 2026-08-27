@@ -21,6 +21,10 @@ add_library(
 	u_autoexpgain.h
 	u_bitwise.c
 	u_bitwise.h
+	u_body_tracker.c
+	u_body_tracker.h
+	u_body_tracker_ni.c
+	u_body_tracker_ni.h
 	u_builder_helpers.c
 	u_builder_helpers.h
 	u_builder_search.c
@@ -33,6 +37,8 @@ add_library(
 	u_deque.h
 	u_device.c
 	u_device.h
+	u_device_id.c
+	u_device_id.h
 	u_device_ni.c
 	u_device_ni.h
 	u_distortion.c

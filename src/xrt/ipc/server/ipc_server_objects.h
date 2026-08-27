@@ -12,6 +12,7 @@
 #include "xrt/xrt_results.h"
 
 struct xrt_space;
+struct xrt_body_tracker;
 struct xrt_hand_tracker;
 struct ipc_client_state;
 
@@ -23,11 +24,16 @@ struct ipc_client_state;
  */
 
 /*!
- * Get a device by ID, must only be called from the per client
- * thread as this function accesses the client state's memory.
+ * Get a device by its per-client-connection slot index.
+ *
+ * The @p id is a @c uint32_t index into @c ics->objects.xdevs used for IPC
+ * message lookups. It is not @ref xrt_device::id.
+ *
+ * Must only be called from the per client thread as this function accesses the
+ * client state's memory.
  *
  * @param ics The client state instance.
- * @param id The device ID.
+ * @param id The per-client slot index.
  * @param out_xdev Will be filled with the device object on success.
  * @return XRT_SUCCESS on success, some other result on failure.
  *
@@ -39,12 +45,18 @@ ipc_server_objects_get_xdev_and_validate(volatile struct ipc_client_state *ics,
                                          struct xrt_device **out_xdev);
 
 /*!
- * Get a device ID for a given device object, must only be called from the per
- * client thread as this function accesses the client state's memory.
+ * Get or allocate a per-client-connection slot index for a device object.
+ *
+ * The returned @c uint32_t is used in IPC messages to look up @p xdev on the
+ * server. It is not @ref xrt_device::id, which is assigned at device creation
+ * and synchronized to clients via @ref ipc_device_info.
+ *
+ * Must only be called from the per client thread as this function accesses the
+ * client state's memory.
  *
  * @param ics The client state instance.
  * @param xdev The device object.
- * @param out_id Will be filled with the device ID on success.
+ * @param out_id Will be filled with the slot index on success.
  * @return XRT_SUCCESS on success, some other result on failure.
  *
  * @ingroup ipc_server
@@ -125,6 +137,42 @@ ipc_server_objects_get_xspc_id_or_add(volatile struct ipc_client_state *ics, str
  */
 xrt_result_t
 ipc_server_objects_destroy_xspc(volatile struct ipc_client_state *ics, uint32_t id);
+
+
+/*
+ *
+ * Body tracker functions.
+ *
+ */
+
+/*!
+ * Get a body tracker by ID, must only be called from the per client thread.
+ *
+ * @ingroup ipc_server
+ */
+xrt_result_t
+ipc_server_objects_get_xbt_and_validate(volatile struct ipc_client_state *ics,
+                                        uint32_t id,
+                                        struct xrt_body_tracker **out_xbt);
+
+/*!
+ * Track a newly created body tracker and return its ID. Takes ownership of
+ * @p xbt until explicit destroy or client disconnect.
+ *
+ * @ingroup ipc_server
+ */
+xrt_result_t
+ipc_server_objects_get_xbt_id_or_add(volatile struct ipc_client_state *ics,
+                                     struct xrt_body_tracker *xbt,
+                                     uint32_t *out_id);
+
+/*!
+ * Destroy a tracked body tracker.
+ *
+ * @ingroup ipc_server
+ */
+xrt_result_t
+ipc_server_objects_destroy_xbt(volatile struct ipc_client_state *ics, uint32_t id);
 
 
 /*

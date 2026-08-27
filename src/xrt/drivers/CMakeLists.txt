@@ -471,6 +471,8 @@ if(XRT_BUILD_DRIVER_HANDTRACKING)
 endif()
 
 if(XRT_BUILD_DRIVER_SURVIVE)
+	include(CMakePushCheckState)
+	include(CheckSymbolExists)
 	add_library(
 		drv_survive STATIC
 		survive/survive_driver.c
@@ -491,6 +493,17 @@ if(XRT_BUILD_DRIVER_SURVIVE)
 			drv_vp2
 			PkgConfig::SURVIVE
 		)
+
+	cmake_push_check_state(RESET)
+	set(CMAKE_REQUIRED_LIBRARIES PkgConfig::SURVIVE)
+	check_symbol_exists(
+		"survive_simple_object_charge_percet" "survive_api.h" HAVE_MISSPELLED_CHARGE_FN
+		)
+	cmake_pop_check_state()
+	if(HAVE_MISSPELLED_CHARGE_FN)
+		target_compile_definitions(drv_survive PUBLIC XR_SURVIVE_MISSPELLED_CHARGE_FN)
+	endif()
+
 	list(APPEND ENABLED_HEADSET_DRIVERS survive)
 endif()
 

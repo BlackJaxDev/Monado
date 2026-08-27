@@ -239,7 +239,7 @@ init_system_shm_state(struct ipc_server *s, volatile struct ipc_client_state *ic
 			continue;
 		}
 
-		// Populate the device.
+		// Assign a per-client slot index for IPC lookups (not xrt_device::id).
 		uint32_t device_id = 0;
 		xret = ipc_server_objects_get_xdev_id_or_add(ics, xdev, &device_id);
 		if (xret != XRT_SUCCESS) {

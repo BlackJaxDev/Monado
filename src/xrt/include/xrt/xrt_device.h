@@ -27,6 +27,28 @@ struct xrt_tracking;
 
 
 /*!
+ * A unique identifier for an @ref xrt_device instance.
+ *
+ * Each device is assigned a 64-bit ID when it is created in the Monado service
+ * process, or in the application process for in-process setups. For
+ * out-of-process clients the ID is synchronized over the IPC layer, so every
+ * client connected to the same service refers to a given device by the same
+ * value.
+ *
+ * The ID is intended for hash maps, caches, and similar lookups. Unlike a
+ * memory pointer it is never reused after the device is destroyed.
+ *
+ * A value of zero is invalid and means the device ID has not been assigned,
+ * matching the zero-initialized state of the struct.
+ *
+ * @ingroup xrt_iface
+ */
+struct xrt_device_id
+{
+	uint64_t val;
+};
+
+/*!
  * A per-lens/display view information.
  *
  * @ingroup xrt_iface
@@ -295,6 +317,7 @@ struct xrt_device_supported
 	bool battery_status;
 	bool brightness_control;
 	bool compositor_info;
+	bool notify_chirality;
 
 	bool planes;
 	enum xrt_plane_detection_capability_flags_ext plane_capability_flags;
@@ -316,6 +339,9 @@ struct xrt_device_supported
  */
 struct xrt_device
 {
+	//! Instance identifier, see @ref xrt_device_id.
+	struct xrt_device_id id;
+
 	//! Enum identifier of the device.
 	enum xrt_device_name name;
 	enum xrt_device_type device_type;
@@ -526,14 +552,6 @@ struct xrt_device
 	 * @param[out] limits        The returned limits.
 	 */
 	xrt_result_t (*get_output_limits)(struct xrt_device *xdev, struct xrt_output_limits *limits);
-
-	/*!
-	 * @brief Get current presence status of the device.
-	 *
-	 * @param[in] xdev           The device.
-	 * @param[out] presence      The returned presence status.
-	 */
-	xrt_result_t (*get_presence)(struct xrt_device *xdev, bool *presence);
 
 	/*!
 	 * Begin a plane detection request
@@ -755,6 +773,17 @@ struct xrt_device
 	xrt_result_t (*end_feature)(struct xrt_device *xdev, enum xrt_device_feature_type type);
 
 	/*!
+	 * Notify the device of it's new chirality, or that it no longer has a set chirality.
+	 *
+	 * Devices are assumed to have no set chirality by default.
+	 *
+	 * @param[in] xdev          The device.
+	 * @param[in] has_chirality Whether or not the device has a set chirality.
+	 * @param[in] chirality     The device's current chirality (unset if `has_chirality` is false).
+	 */
+	xrt_result_t (*notify_chirality)(struct xrt_device *xdev, bool has_chirality, enum xrt_hand chirality);
+
+	/*!
 	 * Destroy device.
 	 */
 	void (*destroy)(struct xrt_device *xdev);
@@ -935,23 +964,6 @@ xrt_device_get_output_limits(struct xrt_device *xdev, struct xrt_output_limits *
 {
 	if (xdev->get_output_limits) {
 		return xdev->get_output_limits(xdev, limits);
-	} else {
-		return XRT_ERROR_NOT_IMPLEMENTED;
-	}
-}
-
-/*!
- * Helper function for @ref xrt_device::get_presence.
- *
- * @copydoc xrt_device::get_presence
- *
- * @public @memberof xrt_device
- */
-XRT_NONNULL_ALL static inline xrt_result_t
-xrt_device_get_presence(struct xrt_device *xdev, bool *presence)
-{
-	if (xdev->get_presence) {
-		return xdev->get_presence(xdev, presence);
 	} else {
 		return XRT_ERROR_NOT_IMPLEMENTED;
 	}
@@ -1170,6 +1182,19 @@ XRT_NONNULL_ALL static inline xrt_result_t
 xrt_device_end_feature(struct xrt_device *xdev, enum xrt_device_feature_type type)
 {
 	return xdev->end_feature(xdev, type);
+}
+
+/*!
+ * Helper function for @ref xrt_device::notify_chirality.
+ *
+ * @copydoc xrt_device::notify_chirality
+ *
+ * @public @memberof xrt_device
+ */
+XRT_NONNULL_ALL static inline xrt_result_t
+xrt_device_notify_chirality(struct xrt_device *xdev, bool has_chirality, enum xrt_hand chirality)
+{
+	return xdev->notify_chirality(xdev, has_chirality, chirality);
 }
 
 /*!

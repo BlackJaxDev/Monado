@@ -207,18 +207,6 @@ ipc_client_xdev_set_body_tracking_fidelity_meta(struct xrt_device *xdev,
 }
 
 static xrt_result_t
-ipc_client_xdev_get_presence(struct xrt_device *xdev, bool *presence)
-{
-	struct ipc_client_xdev *icx = ipc_client_xdev(xdev);
-
-	xrt_result_t xret = ipc_call_device_get_presence( //
-	    icx->ipc_c,                                   //
-	    icx->device_id,                               //
-	    presence);                                    //
-	IPC_CHK_ALWAYS_RET(icx->ipc_c, xret, "ipc_call_device_get_presence");
-}
-
-static xrt_result_t
 ipc_client_xdev_set_output(struct xrt_device *xdev, enum xrt_output_name name, const struct xrt_output_value *value)
 {
 	struct ipc_client_xdev *icx = ipc_client_xdev(xdev);
@@ -471,6 +459,8 @@ ipc_client_xdev_init(struct ipc_client_xdev *icx,
 
 	// Important fields.
 	icx->ipc_c = ipc_c;
+
+	// Slot index for IPC server lookups; not the same as xrt_device::id.
 	icx->device_id = device_id;
 
 	/*
@@ -490,7 +480,6 @@ ipc_client_xdev_init(struct ipc_client_xdev *icx,
 	icx->base.set_body_tracking_calibration_override_meta =
 	    ipc_client_xdev_set_body_tracking_calibration_override_meta;
 	icx->base.set_body_tracking_fidelity_meta = ipc_client_xdev_set_body_tracking_fidelity_meta;
-	icx->base.get_presence = ipc_client_xdev_get_presence;
 	icx->base.set_output = ipc_client_xdev_set_output;
 	icx->base.get_output_limits = ipc_client_xdev_get_output_limits;
 	icx->base.get_compositor_info = ipc_client_xdev_get_compositor_info;
@@ -513,6 +502,7 @@ ipc_client_xdev_init(struct ipc_client_xdev *icx,
 	IPC_CHK_WITH_GOTO(ipc_c, xret, "ipc_receive_device_get_info_locked", out_free_and_unlock);
 
 	// Copying the information from the info.
+	icx->base.id.val = info.xrt_device_id_val;
 	icx->base.device_type = info.device_type;
 	icx->base.supported = info.supported;
 	icx->base.name = info.name;

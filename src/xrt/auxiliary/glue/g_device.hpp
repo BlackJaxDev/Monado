@@ -12,7 +12,11 @@
 
 #include "xrt/xrt_device.h"
 #include "util/u_device.h"
+#include "util/u_device_id.h"
 #include "g_catch_guard.hpp"
+#include "g_traits.hpp"
+
+#include <type_traits>
 
 
 namespace xrt::util {
@@ -68,9 +72,6 @@ struct DeviceFunctions
 	 */
 	bool plane_detection{false};
 
-	//! @ref xrt_device::get_presence
-	bool presence{false};
-
 	//! @ref xrt_device::ref_space_usage
 	bool reference_space{false};
 
@@ -91,16 +92,23 @@ struct DeviceFunctions
 	 * @ref xrt_device::end_feature
 	 */
 	bool features{false};
+
+	/*!
+	 * @ref xrt_device::notify_chirality
+	 */
+	bool notify_chirality{false};
 };
 
 /*!
- * Helper wrapper for @ref xrt_device, Monado has C style inheritance where the
- * first field is the base class. In order to safely cast the from the parent
- * to the child class it needs to have a standard layout, it is very easy to
- * not have that. So this class, which has standard layout, goes via itself to
- * then using a static_cast to go to the derived class.
+ * CRTP glue wrapper for @ref xrt_device. Relies on standard layout to recover
+ * the derived object from the C struct, and has some requirements and
+ * limitations because of that. See @ref cpp-glue-wrappers for the guide and
+ * conventions for these wrappers.
  *
- * https://en.cppreference.com/w/cpp/types/is_standard_layout
+ * Unlike the other wrappers it wires function pointers selectively: the
+ * `functions` @ref DeviceFunctions bitmask decides which C function pointers
+ * are installed, so `T` only has to implement C++ methods for the features it
+ * turns on.
  */
 template <class T, DeviceFunctions functions> class DeviceBase
 {
@@ -110,8 +118,15 @@ public: // Members
 	 */
 	DeviceBase() noexcept
 	{
+		static_assert(std::is_standard_layout_v<DeviceBase>,
+		              "glue base must be standard layout for pointer recovery");
+		static_assert(is_non_virtual_base_v<DeviceBase, T>,
+		              "glue base must be a non-virtual base of T for pointer recovery");
+
 		// Setup function for the device.
 		auto &xdev = *getXDev();
+
+		u_device_id_assign(&xdev);
 
 		// Inits all functions, some are replaced below.
 		u_device_populate_function_pointers(&xdev, getTrackedPoseWrap, destroyDeviceWrap);
@@ -167,10 +182,6 @@ public: // Members
 			xdev.get_plane_detections_ext = getPlaneDetectionsExtWrap;
 		}
 
-		if constexpr (functions.presence) {
-			xdev.get_presence = getPresenceWrap;
-		}
-
 		if constexpr (functions.reference_space) {
 			xdev.ref_space_usage = refSpaceUsageWrap;
 		}
@@ -191,6 +202,10 @@ public: // Members
 		if constexpr (functions.features) {
 			xdev.begin_feature = beginFeatureWrap;
 			xdev.end_feature = endFeatureWrap;
+		}
+
+		if constexpr (functions.notify_chirality) {
+			xdev.notify_chirality = notifyChiralityWrap;
 		}
 	}
 
@@ -242,10 +257,10 @@ public: // Members
 
 private: // Fields
 	/*!
-	 * C style inheritance, this object has to be first.
-	 *
-	 * We have to do it this way because when we add a field to this class
-	 * and we do C++ style inheritance we lose our standard layout status.
+	 * Wrapped @ref xrt_device. Must be the first data member: a pointer to it is
+	 * then interconvertible with a pointer to this standard-layout base, which
+	 * lets the glue cast a C pointer back to the derived C++ class. See
+	 * @ref cpp-glue-wrappers.
 	 */
 	xrt_device mDevice = {};
 
@@ -342,13 +357,6 @@ private: // Functions
 	getOutputLimitsWrap(struct xrt_device *xdev, struct xrt_output_limits *limits) noexcept
 	try {
 		return GET(xdev).getOutputLimits(limits);
-	}
-	G_CATCH_GUARDS
-
-	static xrt_result_t
-	getPresenceWrap(struct xrt_device *xdev, bool *presence) noexcept
-	try {
-		return GET(xdev).getPresence(presence);
 	}
 	G_CATCH_GUARDS
 
@@ -480,6 +488,13 @@ private: // Functions
 	endFeatureWrap(struct xrt_device *xdev, enum xrt_device_feature_type type) noexcept
 	try {
 		return GET(xdev).endFeature(type);
+	}
+	G_CATCH_GUARDS
+
+	static xrt_result_t
+	notifyChiralityWrap(struct xrt_device *xdev, bool has_chirality, enum xrt_hand chirality) noexcept
+	try {
+		return GET(xdev).notifyChirality(has_chirality, chirality);
 	}
 	G_CATCH_GUARDS
 

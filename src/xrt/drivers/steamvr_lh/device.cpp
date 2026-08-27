@@ -1,4 +1,5 @@
 // Copyright 2023, Shawn Wallace
+// Copyright 2026, NVIDIA CORPORATION.
 // SPDX-License-Identifier: BSL-1.0
 /*!
  * @file
@@ -17,6 +18,7 @@
 
 #include "util/u_debug.h"
 #include "util/u_device.h"
+#include "util/u_device_id.h"
 #include "util/u_hand_tracking.h"
 #include "util/u_logging.h"
 #include "util/u_json.hpp"
@@ -271,7 +273,11 @@ HmdDevice::HmdDevice(const DeviceBuilder &builder) : Device(builder)
 
 	this->supported.compositor_info = true;
 
-	inputs_vec = {xrt_input{true, 0, XRT_INPUT_GENERIC_HEAD_POSE, {}}};
+	inputs_vec = {
+	    xrt_input{true, 0, XRT_INPUT_GENERIC_HEAD_POSE, {}},
+	    xrt_input{false, 0, XRT_INPUT_GENERIC_HEAD_DETECT, {}},
+	};
+	this->inputs_map["/proximity"] = &inputs_vec[1];
 	this->inputs = inputs_vec.data();
 	this->input_count = inputs_vec.size();
 
@@ -304,6 +310,8 @@ Device::~Device()
 
 Device::Device(const DeviceBuilder &builder) : xrt_device({}), ctx(builder.ctx), driver(builder.driver)
 {
+	u_device_id_assign(this);
+
 	m_relation_history_create(&relation_hist);
 	std::strncpy(this->serial, builder.serial, XRT_DEVICE_NAME_LEN - 1);
 	this->serial[XRT_DEVICE_NAME_LEN - 1] = 0;
@@ -316,7 +324,7 @@ Device::Device(const DeviceBuilder &builder) : xrt_device({}), ctx(builder.ctx),
 	this->supported.battery_status = true;
 	this->supported.brightness_control = true;
 
-	this->xrt_device::update_inputs = &device_bouncer<Device, &Device::update_inputs, xrt_result_t>;
+	this->xrt_device::update_inputs = u_device_noop_update_inputs;
 #define SETUP_MEMBER_FUNC(name) this->xrt_device::name = &device_bouncer<Device, &Device::name>
 	SETUP_MEMBER_FUNC(get_tracked_pose);
 	SETUP_MEMBER_FUNC(get_battery_status);
@@ -655,14 +663,6 @@ ControllerDevice::set_haptic_handle(vr::VRInputComponentHandle_t handle)
 }
 
 xrt_result_t
-Device::update_inputs()
-{
-	std::lock_guard<std::mutex> lock(frame_mutex);
-	ctx->maybe_run_frame(++current_frame);
-	return XRT_SUCCESS;
-}
-
-xrt_result_t
 ControllerDevice::get_hand_tracking(enum xrt_input_name name,
                                     int64_t desired_timestamp_ns,
                                     struct xrt_hand_joint_set *out_value,
@@ -873,7 +873,8 @@ ControllerDevice::set_output(xrt_output_name name, const xrt_output_value *value
 	event.fFrequency = frequency;
 	event.fAmplitude = vib.amplitude;
 
-	ctx->add_haptic_event(event);
+	// `latest_haptic_event` assumes single haptic component per device
+	this->latest_haptic_event = ctx->add_haptic_event(event, this->latest_haptic_event);
 	return XRT_SUCCESS;
 }
 
@@ -1405,6 +1406,10 @@ HmdDevice::handle_property_write(const vr::PropertyWrite_t &prop)
 		float bat = *static_cast<float *>(prop.pvBuffer);
 		this->charge = bat;
 		DEV_DEBUG("Battery: HMD: %f", bat);
+		break;
+	}
+	case vr::Prop_ContainsProximitySensor_Bool: {
+		this->supported.presence = *static_cast<bool *>(prop.pvBuffer);
 		break;
 	}
 	case vr::Prop_DisplaySupportsAnalogGain_Bool: {

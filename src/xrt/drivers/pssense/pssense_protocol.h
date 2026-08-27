@@ -38,10 +38,13 @@
 #define PCM_SAMPLE_RATE 3000
 #define PCM_HAPTIC_BUF_SIZE 32
 
-const uint8_t INPUT_REPORT_ID = 0x31;
-const uint8_t OUTPUT_REPORT_ID = 0x31;
-const uint8_t OUTPUT_REPORT_TAG = 0x10;
-const uint8_t CALIBRATION_DATA_FEATURE_REPORT_ID = 0x05;
+#define INPUT_REPORT_ID_USB 0x01
+#define INPUT_REPORT_ID_BLUETOOTH 0x31
+
+#define OUTPUT_REPORT_ID_BLUETOOTH 0x31
+#define OUTPUT_REPORT_TAG 0x10
+
+#define CALIBRATION_DATA_FEATURE_REPORT_ID 0x05
 
 #define CALIBRATION_DATA_PART_ID_1 0
 #define CALIBRATION_DATA_PART_ID_2 0x81
@@ -57,14 +60,11 @@ const uint8_t CHARGE_STATE_ABNORMAL_VOLTAGE = 0x0A;
 const uint8_t CHARGE_STATE_ABNORMAL_TEMP = 0x0B;
 const uint8_t CHARGE_STATE_CHARGING_ERROR = 0x0F;
 
-#define INPUT_REPORT_LENGTH 78
-/*!
- * HID input report data packet.
- */
-struct pssense_input_report
+#define INPUT_REPORT_BLUETOOTH_LENGTH 78
+#define INPUT_REPORT_USB_LENGTH 64
+
+struct pssense_input_report_common
 {
-	uint8_t report_id;
-	uint8_t bt_header;
 	uint8_t thumbstick_x;
 	uint8_t thumbstick_y;
 	uint8_t trigger_value;
@@ -81,20 +81,37 @@ struct pssense_input_report
 	uint8_t unknown3[7];
 	uint8_t trigger_feedback_state;
 	uint8_t trigger_feedback_mode;
-	uint8_t battery_state; // High bits charge level 0x00-0x0a, low bits battery state
+	uint8_t battery_state; // Low nibble charge level 0x00-0x0a, high nibble battery state
 	uint8_t plug_state;    // Flags for USB data and/or power connected
 	__le32 host_timestamp;
 	__le32 device_timestamp_ticks;
 	uint8_t unknown4[4];
 	uint8_t aes_cmac[8];
+};
+
+struct pssense_usb_input_report
+{
+	uint8_t report_id;
+	struct pssense_input_report_common common;
+};
+static_assert(sizeof(struct pssense_usb_input_report) == INPUT_REPORT_USB_LENGTH,
+              "Incorrect input report struct length");
+
+/*!
+ * HID input report data packet.
+ */
+struct pssense_bluetooth_input_report
+{
+	uint8_t report_id;
+	uint8_t bt_header;
+	struct pssense_input_report_common common;
 	uint8_t unknown5;
 	uint8_t crc_failure_count;
 	uint8_t padding[7];
 	__le32 crc;
 };
-static_assert(sizeof(struct pssense_input_report) == INPUT_REPORT_LENGTH, "Incorrect input report struct length");
-
-#define PS5_OUTPUT_REPORT_LENGTH 78
+static_assert(sizeof(struct pssense_bluetooth_input_report) == INPUT_REPORT_BLUETOOTH_LENGTH,
+              "Incorrect input report struct length");
 
 enum pssense_output_settings_flag1
 {
@@ -221,6 +238,9 @@ struct pssense_output_settings
 };
 static_assert(sizeof(struct pssense_output_settings) == 38, "Incorrect output settings struct length");
 
+#define OUTPUT_REPORT_LENGTH_PS5 78
+#define OUTPUT_REPORT_LENGTH_USB 39
+
 /**
  * HID output report data packet matching the PS5 layout, with PCM haptics.
  *
@@ -237,7 +257,19 @@ struct pssense_ps5_output_report
 	uint8_t haptics[PCM_HAPTIC_BUF_SIZE];
 	__le32 crc;
 };
-static_assert(sizeof(struct pssense_ps5_output_report) == PS5_OUTPUT_REPORT_LENGTH,
+static_assert(sizeof(struct pssense_ps5_output_report) == OUTPUT_REPORT_LENGTH_PS5,
+              "Incorrect output report struct length");
+
+struct pssense_usb_output_report
+{
+	// @note: There appears to be no dedicated report ID field here. Setting this report ID to
+	//        any non-zero number seems to work, though. Zero doesn't work.
+	//        I believe this controller just expects strange report IDs over USB.
+	//        If USB breaks when using hidapi, this is the first place to check.
+	uint8_t seq_no_mode;
+	struct pssense_output_settings settings;
+};
+static_assert(sizeof(struct pssense_usb_output_report) == OUTPUT_REPORT_LENGTH_USB,
               "Incorrect output report struct length");
 
 #define FEATURE_REPORT_LENGTH 64

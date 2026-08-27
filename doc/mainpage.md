@@ -2,6 +2,7 @@
 
 <!--
 Copyright 2018-2022, Collabora, Ltd. and the Monado contributors
+Copyright 2026, NVIDIA CORPORATION.
 SPDX-License-Identifier: BSL-1.0
 -->
 
@@ -40,6 +41,7 @@ includes a section for changes that have not yet been in a tagged release.
 ## Developer Guides
 
 * @ref conventions - to help you both read and write Monado code
+* @ref cpp-glue-wrappers - C++ CRTP wrappers for @ref xrt_iface types
 * @ref writing-driver
 * @ref implementing-extension
 * @ref how-to-release

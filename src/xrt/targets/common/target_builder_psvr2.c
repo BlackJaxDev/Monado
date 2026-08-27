@@ -96,13 +96,13 @@ psvr2_estimate_system(struct xrt_builder *xb,
 
 #ifdef XRT_BUILD_DRIVER_PSSENSE
 	struct xrt_prober_device *dev_controller_left =
-	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_LEFT, XRT_BUS_TYPE_BLUETOOTH);
+	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_LEFT, XRT_BUS_TYPE_ANY);
 	if (dev_controller_left != NULL) {
 		estimate->certain.left = true;
 	}
 
 	struct xrt_prober_device *dev_controller_right =
-	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_RIGHT, XRT_BUS_TYPE_BLUETOOTH);
+	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_RIGHT, XRT_BUS_TYPE_ANY);
 	if (dev_controller_right != NULL) {
 		estimate->certain.right = true;
 	}
@@ -124,7 +124,7 @@ psvr2_open_system_impl(struct xrt_builder *xb,
                        struct xrt_tracking_origin *origin,
                        struct xrt_system_devices *xsysd,
                        struct xrt_frame_context *xfctx,
-                       struct t_builder_roles_helper *tbrh)
+                       struct t_builder_options *tbo)
 {
 	struct xrt_prober_device **xpdevs = NULL;
 	size_t xpdev_count = 0;
@@ -150,14 +150,14 @@ psvr2_open_system_impl(struct xrt_builder *xb,
 		xsysd->static_xdevs[xsysd->static_xdev_count++] = head_xdev;
 	}
 
-	tbrh->head = head_xdev;
-	tbrh->eyes = head_xdev;
-	tbrh->face = head_xdev;
+	tbo->head = head_xdev;
+	tbo->eyes = head_xdev;
+	tbo->face = head_xdev;
 
 #ifdef XRT_BUILD_DRIVER_PSSENSE
 	struct xrt_device *left_xdev = NULL;
 	struct xrt_prober_device *left_xpdev =
-	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_LEFT, XRT_BUS_TYPE_BLUETOOTH);
+	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_LEFT, XRT_BUS_TYPE_ANY);
 	if (left_xpdev != NULL) {
 		left_xdev = pssense_create(xp, left_xpdev, xfctx, NULL);
 		if (left_xdev == NULL) {
@@ -169,7 +169,7 @@ psvr2_open_system_impl(struct xrt_builder *xb,
 
 	struct xrt_device *right_xdev = NULL;
 	struct xrt_prober_device *right_xpdev =
-	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_RIGHT, XRT_BUS_TYPE_BLUETOOTH);
+	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_RIGHT, XRT_BUS_TYPE_ANY);
 	if (right_xpdev != NULL) {
 		right_xdev = pssense_create(xp, right_xpdev, xfctx, NULL);
 		if (right_xdev == NULL) {
@@ -179,8 +179,8 @@ psvr2_open_system_impl(struct xrt_builder *xb,
 		}
 	}
 
-	tbrh->left = left_xdev;
-	tbrh->right = right_xdev;
+	tbo->left = left_xdev;
+	tbo->right = right_xdev;
 #endif
 
 	xret = xrt_prober_unlock_list(xp, &xpdevs);

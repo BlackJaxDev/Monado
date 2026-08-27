@@ -213,6 +213,7 @@ struct pssense_device
 	struct t_constellation_tracker_device constellation_device;
 	struct t_constellation_tracker_tracking_source constellation_tracking_source;
 
+	bool usb;
 	struct os_hid_device *hid;
 	struct os_thread_helper controller_thread;
 
@@ -427,11 +428,10 @@ pssense_host_ts_to_device(struct pssense_device *pssense,
 }
 
 /*!
- * Reads one packet from the device, handles time out, locking and checking if
- * the thread has been told to shut down.
+ * Reads one packet from the device, wrapping no data as EAGAIN. Does not block.
  */
 static int
-pssense_read_packet_data(struct pssense_device *pssense, uint8_t *buffer, size_t size, bool check_size)
+pssense_read_packet_data(struct pssense_device *pssense, uint8_t *buffer, size_t size)
 {
 	// Poll, don't block. Outer thread needs to run quick
 	int ret = os_hid_read(pssense->hid, buffer, size, 0);
@@ -444,12 +444,6 @@ pssense_read_packet_data(struct pssense_device *pssense, uint8_t *buffer, size_t
 	if (ret < 0) {
 		PSSENSE_ERROR(pssense, "Failed to read device '%i'!", ret);
 		return ret;
-	}
-
-	// Skip this check if we haven't flushed all the compat mode packets yet, since they're shorter.
-	if (check_size && ret != (int)size) {
-		PSSENSE_ERROR(pssense, "Unexpected HID packet size %i (expected %zu)", ret, size);
-		return -EIO;
 	}
 
 	return ret;
@@ -488,86 +482,55 @@ pssense_update_fusion(struct pssense_device *pssense)
 	                        pssense->timing.latest_imu_time_ns);
 }
 
-static bool
-pssense_handle_read(struct pssense_device *pssense)
+static int
+pssense_handle_packet(struct pssense_device *pssense,
+                      timepoint_ns recv_time_ns,
+                      const struct pssense_input_report_common *data)
 {
-	int ret;
-
-	// Report data
-	struct pssense_input_report data = {0};
-	ret = pssense_read_packet_data(pssense, (uint8_t *)&data, sizeof(data), true);
-
-	// Get the receive time as close to the packet read as possible
-	timepoint_ns recv_time_ns = os_monotonic_get_ns();
-
-	if (ret == -EAGAIN) {
-		// No data yet, not an error
-		return true;
-	}
-
-	if (ret < 0) {
-		PSSENSE_ERROR(pssense, "Error reading from device: %d", ret);
-		return false;
-	}
-
 	// Final input state
 	struct pssense_input_state input = {
 	    .timestamp_ns = recv_time_ns,
 	};
 
-	if (data.report_id != INPUT_REPORT_ID) {
-		PSSENSE_WARN(pssense, "Unrecognized HID report id %u", data.report_id);
-		return false;
-	}
-
-	// Verify the CRC of the packet
-	uint32_t expected_crc = __le32_to_cpu(data.crc);
-	uint32_t crc = crc32_le(0, &INPUT_REPORT_CRC32_SEED, 1);
-	crc = crc32_le(crc, (uint8_t *)&data, sizeof(struct pssense_input_report) - 4);
-	if (crc != expected_crc) {
-		PSSENSE_WARN(pssense, "CRC mismatch; skipping input. Expected %08X but got %08X", expected_crc, crc);
-		return false;
-	}
-
-	uint32_t seq_no = __le32_to_cpu(data.seq_no);
+	uint32_t seq_no = __le32_to_cpu(data->seq_no);
 	if (input.seq_no != 0 && seq_no != input.seq_no + 1) {
 		PSSENSE_WARN(pssense, "Missed seq no %u. Previous was %u", seq_no, input.seq_no);
 	}
 	input.seq_no = seq_no;
 
 	// Update input state
-	input.ps_click = (data.buttons[1] & 16) != 0;
-	input.squeeze_touch = (data.buttons[2] & 8) != 0;
-	input.squeeze_proximity = data.squeeze_proximity / 255.0f;
-	input.trigger_touch = (data.buttons[1] & 128) != 0;
-	input.trigger_value = data.trigger_value / 255.0f;
-	input.trigger_proximity = data.trigger_proximity / 255.0f;
-	input.thumbstick.x = (data.thumbstick_x - 128) / 128.0f;
-	input.thumbstick.y = (data.thumbstick_y - 128) / -128.0f;
-	input.thumbstick_touch = (data.buttons[2] & 4) != 0;
+	input.ps_click = (data->buttons[1] & 16) != 0;
+	input.squeeze_touch = (data->buttons[2] & 8) != 0;
+	input.squeeze_proximity = data->squeeze_proximity / 255.0f;
+	input.trigger_touch = (data->buttons[1] & 128) != 0;
+	input.trigger_value = data->trigger_value / 255.0f;
+	input.trigger_proximity = data->trigger_proximity / 255.0f;
+	input.thumbstick.x = (data->thumbstick_x - 128) / 128.0f;
+	input.thumbstick.y = (data->thumbstick_y - 128) / -128.0f;
+	input.thumbstick_touch = (data->buttons[2] & 4) != 0;
 
 	if (pssense->hand == XRT_HAND_LEFT) {
-		input.share_click = (data.buttons[1] & 1) != 0;
-		input.square_click = (data.buttons[0] & 1) != 0;
-		input.square_touch = (data.buttons[2] & 2) != 0;
-		input.triangle_click = (data.buttons[0] & 8) != 0;
-		input.triangle_touch = (data.buttons[2] & 1) != 0;
-		input.squeeze_click = (data.buttons[0] & 16) != 0;
-		input.trigger_click = (data.buttons[0] & 64) != 0;
-		input.thumbstick_click = (data.buttons[1] & 4) != 0;
+		input.share_click = (data->buttons[1] & 1) != 0;
+		input.square_click = (data->buttons[0] & 1) != 0;
+		input.square_touch = (data->buttons[2] & 2) != 0;
+		input.triangle_click = (data->buttons[0] & 8) != 0;
+		input.triangle_touch = (data->buttons[2] & 1) != 0;
+		input.squeeze_click = (data->buttons[0] & 16) != 0;
+		input.trigger_click = (data->buttons[0] & 64) != 0;
+		input.thumbstick_click = (data->buttons[1] & 4) != 0;
 	} else if (pssense->hand == XRT_HAND_RIGHT) {
-		input.options_click = (data.buttons[1] & 2) != 0;
-		input.cross_click = (data.buttons[0] & 2) != 0;
-		input.cross_touch = (data.buttons[2] & 2) != 0;
-		input.circle_click = (data.buttons[0] & 4) != 0;
-		input.circle_touch = (data.buttons[2] & 1) != 0;
-		input.squeeze_click = (data.buttons[0] & 32) != 0;
-		input.trigger_click = (data.buttons[0] & 128) != 0;
-		input.thumbstick_click = (data.buttons[1] & 8) != 0;
+		input.options_click = (data->buttons[1] & 2) != 0;
+		input.cross_click = (data->buttons[0] & 2) != 0;
+		input.cross_touch = (data->buttons[2] & 2) != 0;
+		input.circle_click = (data->buttons[0] & 4) != 0;
+		input.circle_touch = (data->buttons[2] & 1) != 0;
+		input.squeeze_click = (data->buttons[0] & 32) != 0;
+		input.trigger_click = (data->buttons[0] & 128) != 0;
+		input.thumbstick_click = (data->buttons[1] & 8) != 0;
 	}
 
 	// Update IMU data
-	uint32_t imu_ticks = __le32_to_cpu(data.imu_ticks);
+	uint32_t imu_ticks = __le32_to_cpu(data->imu_ticks);
 	int64_t imu_ticks_delta = imu_ticks - pssense->timing.imu_ticks_last;
 	if (imu_ticks_delta >= 0) {
 		pssense->timing.imu_ticks_total += imu_ticks_delta;
@@ -575,18 +538,18 @@ pssense_handle_read(struct pssense_device *pssense)
 
 		pssense->timing.latest_imu_time_ns = IMU_TICKS_TO_NS(pssense->timing.imu_ticks_total);
 
-		input.gyro_raw.x = (int16_t)__le16_to_cpu(data.gyro[0]);
-		input.gyro_raw.y = (int16_t)__le16_to_cpu(data.gyro[1]);
-		input.gyro_raw.z = (int16_t)__le16_to_cpu(data.gyro[2]);
+		input.gyro_raw.x = (int16_t)__le16_to_cpu(data->gyro[0]);
+		input.gyro_raw.y = (int16_t)__le16_to_cpu(data->gyro[1]);
+		input.gyro_raw.z = (int16_t)__le16_to_cpu(data->gyro[2]);
 
-		input.accel_raw.x = (int16_t)__le16_to_cpu(data.accel[0]);
-		input.accel_raw.y = (int16_t)__le16_to_cpu(data.accel[1]);
-		input.accel_raw.z = (int16_t)__le16_to_cpu(data.accel[2]);
+		input.accel_raw.x = (int16_t)__le16_to_cpu(data->accel[0]);
+		input.accel_raw.y = (int16_t)__le16_to_cpu(data->accel[1]);
+		input.accel_raw.z = (int16_t)__le16_to_cpu(data->accel[2]);
 	} else {
 		PSSENSE_WARN(pssense, "Time went backwards. Check your play area for black holes.");
 	}
 
-	uint32_t device_ticks = __le32_to_cpu(data.device_timestamp_ticks);
+	uint32_t device_ticks = __le32_to_cpu(data->device_timestamp_ticks);
 	int64_t device_ticks_delta = device_ticks - pssense->timing.device_ticks_last;
 	if (device_ticks_delta >= 0) {
 		pssense->timing.device_ticks_total += device_ticks_delta;
@@ -598,10 +561,10 @@ pssense_handle_read(struct pssense_device *pssense)
 	}
 
 	// Battery state is upper 4 bits
-	uint8_t battery_state = data.battery_state >> 4;
+	uint8_t battery_state = data->battery_state >> 4;
 
 	// Charge values go from 0..10, so add 5% and cap at 100% so we never show 0% charge
-	float battery_percent = MIN(1.0f, (data.battery_state & 0xf) * .1f + .05);
+	float battery_percent = MIN(1.0f, (data->battery_state & 0xf) * .1f + .05);
 
 	bool battery_state_valid, charging;
 	if (battery_state == CHARGE_STATE_DISCHARGING) {
@@ -641,7 +604,7 @@ pssense_handle_read(struct pssense_device *pssense)
 	os_thread_helper_lock(&pssense->controller_thread);
 
 	// Mark the LED sync refinement sample as applied
-	uint32_t latest_host_send_time = __le32_to_cpu(data.host_timestamp);
+	uint32_t latest_host_send_time = __le32_to_cpu(data->host_timestamp);
 	if (latest_host_send_time != pssense->timing.last_sent_host_timestamp_us &&
 	    pssense->tracking.led_sync_sample_needs_marking) {
 		t_led_sync_mark_latest_sample_applied(&pssense->tracking.led_sync_refinement, recv_time_ns);
@@ -658,16 +621,133 @@ pssense_handle_read(struct pssense_device *pssense)
 
 	os_thread_helper_unlock(&pssense->controller_thread);
 
-	return true;
+	return 0;
 }
 
 static int
-pssense_send_output_report_locked(struct pssense_device *pssense)
+pssense_handle_read(struct pssense_device *pssense)
+{
+	int ret;
+
+	// Report data
+	uint8_t buf[INPUT_REPORT_BLUETOOTH_LENGTH] = {0};
+	ret = pssense_read_packet_data(pssense, buf, sizeof(buf));
+
+	// Get the receive time as close to the packet read as possible
+	timepoint_ns recv_time_ns = os_monotonic_get_ns();
+
+	if (ret == -EAGAIN) {
+		// No data yet, not an error
+		return 0;
+	}
+
+	if (ret < 0) {
+		PSSENSE_ERROR(pssense, "Error reading from device: %d", ret);
+		return ret;
+	}
+
+	switch (buf[0]) {
+	case INPUT_REPORT_ID_USB: {
+		struct pssense_usb_input_report data = {0};
+		if (ret != sizeof(data)) {
+			PSSENSE_ERROR(pssense, "Unexpected USB input report size %d (expected %zu)", ret, sizeof(data));
+			return -EINVAL;
+		}
+
+		memcpy(&data, buf, sizeof(data));
+
+		return pssense_handle_packet(pssense, recv_time_ns, &data.common);
+	}
+	case INPUT_REPORT_ID_BLUETOOTH: {
+		struct pssense_bluetooth_input_report data = {0};
+		if (ret != sizeof(data)) {
+			PSSENSE_ERROR(pssense, "Unexpected Bluetooth input report size %d (expected %zu)", ret,
+			              sizeof(data));
+			return -EINVAL;
+		}
+
+		memcpy(&data, buf, sizeof(data));
+
+		// Verify the CRC of the packet
+		uint32_t expected_crc = __le32_to_cpu(data.crc);
+		uint32_t crc = crc32_le(0, &INPUT_REPORT_CRC32_SEED, 1);
+		crc = crc32_le(crc, (uint8_t *)&data, sizeof(struct pssense_bluetooth_input_report) - 4);
+		if (crc != expected_crc) {
+			PSSENSE_WARN(pssense, "CRC mismatch; skipping input. Expected %08X but got %08X", expected_crc,
+			             crc);
+			return -EINVAL;
+		}
+
+		return pssense_handle_packet(pssense, recv_time_ns, &data.common);
+	}
+	default: {
+		PSSENSE_WARN(pssense, "Unhandled HID report id %u", buf[0]);
+	}
+	}
+
+	return 0;
+}
+
+static void
+pssense_set_output_report_settings_locked(struct pssense_device *pssense,
+                                          struct pssense_output_settings *settings,
+                                          bool do_vibration,
+                                          uint64_t now_ns)
+{
+	if (now_ns >= pssense->output.vibration_end_timestamp_ns) {
+		pssense->output.vibration_amplitude = 0;
+	}
+
+	if (pssense->output.send_vibration && do_vibration) {
+		settings->flag1 |= OUTPUT_SETTINGS_ENABLE_VIBRATION_BITS | pssense->output.vibration_mode;
+		settings->vibration_amplitude = pssense->output.vibration_amplitude;
+		pssense->output.send_vibration = pssense->output.vibration_amplitude > 0;
+	}
+
+	if (pssense->output.send_trigger_feedback) {
+		settings->flag1 |= PSSENSE_OUTPUT_SETTINGS_FLAG1_ADAPTIVE_TRIGGER_ENABLE;
+		settings->trigger_settings.mode = pssense->output.trigger_feedback_mode;
+		pssense->output.send_trigger_feedback = false;
+	}
+
+	// Give it some time to settle
+	if (pssense->tracking.received_frames > 10) {
+		settings->led_settings = pssense->tracking.led_settings;
+
+#if 0
+		PSSENSE_DEBUG(pssense, "Full LED settings: cycle length %uns, cycle position %luns, sequence number %u",
+		              settings->led_settings.cycle_length / 3,
+		              (timepoint_ns)IMU_TICKS_TO_NS(settings->led_settings.cycle_position),
+		              pssense->tracking.led_sequence_num);
+
+		PSSENSE_DEBUG_HEX(pssense, (uint8_t *)&settings->led_settings,
+		                  sizeof(settings->led_settings));
+#endif
+	} else {
+		settings->led_settings.phase = LED_SYNC_PHASE_LED_ALL_OFF;
+	}
+
+	pssense->output.next_seq_no = (pssense->output.next_seq_no + 1) % 16;
+
+	uint32_t host_send_ts = os_monotonic_get_ns() / U_TIME_1US_IN_NS;
+
+	// Set the host timestamp as *close* as possible to us sending the packet
+	settings->host_timestamp_send_time_us = __cpu_to_le32(host_send_ts);
+
+	if (pssense->tracking.led_sync_sample_needs_sending) {
+		pssense->timing.last_sent_host_timestamp_us = host_send_ts;
+		pssense->tracking.led_sync_sample_needs_sending = false;
+		pssense->tracking.led_sync_sample_needs_marking = true;
+	}
+}
+
+static int
+pssense_send_bluetooth_output_report_locked(struct pssense_device *pssense)
 {
 	uint64_t timestamp_ns = os_monotonic_get_ns();
 
 	struct pssense_ps5_output_report report = {
-	    .report_id = OUTPUT_REPORT_ID,
+	    .report_id = OUTPUT_REPORT_ID_BLUETOOTH,
 	    // low bits are always zero, to indicate we are using the PS5 packet format
 	    .seq_no_mode = (pssense->output.next_seq_no << 4) | (0x0),
 	    .tag = OUTPUT_REPORT_TAG,
@@ -678,50 +758,14 @@ pssense_send_output_report_locked(struct pssense_device *pssense)
 	float pcm_buf[PCM_HAPTIC_BUF_SIZE] = {0};
 	size_t read_pcm_samples = u_resampler_read(pssense->output.pcm_haptics_resampler, pcm_buf, ARRAY_SIZE(pcm_buf));
 
-	if (timestamp_ns >= pssense->output.vibration_end_timestamp_ns) {
-		pssense->output.vibration_amplitude = 0;
-	}
-
 	if (read_pcm_samples > 0) {
 		for (size_t i = 0; i < read_pcm_samples; i++) {
 			// Convert from float [-1, 1] to int8 [-128, 127].
 			report.haptics[i] = (int8_t)(CLAMP(((pcm_buf[i] + 1.0f) * 0.5f * 255) - 128, -128, 127));
 		}
-	} else if (pssense->output.send_vibration) {
-		report.settings.flag1 |= OUTPUT_SETTINGS_ENABLE_VIBRATION_BITS | pssense->output.vibration_mode;
-		report.settings.vibration_amplitude = pssense->output.vibration_amplitude;
-		pssense->output.send_vibration = pssense->output.vibration_amplitude > 0;
 	}
 
-	if (pssense->output.send_trigger_feedback) {
-		report.settings.flag1 |= PSSENSE_OUTPUT_SETTINGS_FLAG1_ADAPTIVE_TRIGGER_ENABLE;
-		report.settings.trigger_settings.mode = pssense->output.trigger_feedback_mode;
-		pssense->output.send_trigger_feedback = false;
-	}
-
-	// Give it some time to settle
-	if (pssense->tracking.received_frames > 10) {
-		report.settings.led_settings = pssense->tracking.led_settings;
-
-#if 0
-		PSSENSE_DEBUG(pssense, "Full LED settings: cycle length %uns, cycle position %luns, sequence number %u",
-		              report.settings.led_settings.cycle_length / 3,
-		              (timepoint_ns)IMU_TICKS_TO_NS(report.settings.led_settings.cycle_position),
-		              pssense->tracking.led_sequence_num);
-
-		PSSENSE_DEBUG_HEX(pssense, (uint8_t *)&report.settings.led_settings,
-		                  sizeof(report.settings.led_settings));
-#endif
-	} else {
-		report.settings.led_settings.phase = LED_SYNC_PHASE_LED_ALL_OFF;
-	}
-
-	pssense->output.next_seq_no = (pssense->output.next_seq_no + 1) % 16;
-
-	uint32_t host_send_ts = os_monotonic_get_ns() / U_TIME_1US_IN_NS;
-
-	// Set the host timestamp as *close* as possible to us sending the packet
-	report.settings.host_timestamp_send_time_us = __cpu_to_le32(host_send_ts);
+	pssense_set_output_report_settings_locked(pssense, &report.settings, read_pcm_samples == 0, timestamp_ns);
 
 	uint32_t crc = crc32_le(0, &OUTPUT_REPORT_CRC32_SEED, 1);
 	crc = crc32_le(crc, (uint8_t *)&report, sizeof(struct pssense_ps5_output_report) - 4);
@@ -732,16 +776,10 @@ pssense_send_output_report_locked(struct pssense_device *pssense)
 	              "samples: %zu",
 	              pssense->output.vibration_amplitude, pssense->output.vibration_mode,
 	              pssense->output.trigger_feedback_mode, pssense->output.next_seq_no, read_pcm_samples);
-	int ret = os_hid_write(pssense->hid, (uint8_t *)&report, sizeof(struct pssense_ps5_output_report));
-	if (ret != sizeof(struct pssense_ps5_output_report)) {
+	int ret = os_hid_write(pssense->hid, (uint8_t *)&report, sizeof(report));
+	if (ret != sizeof(report)) {
 		PSSENSE_WARN(pssense, "Failed to send output report: %d", ret);
 		return ret < 0 ? ret : -EIO;
-	}
-
-	if (pssense->tracking.led_sync_sample_needs_sending) {
-		pssense->timing.last_sent_host_timestamp_us = host_send_ts;
-		pssense->tracking.led_sync_sample_needs_sending = false;
-		pssense->tracking.led_sync_sample_needs_marking = true;
 	}
 
 #if 0
@@ -749,6 +787,39 @@ pssense_send_output_report_locked(struct pssense_device *pssense)
 #endif
 
 	return 0;
+}
+
+static int
+pssense_send_usb_report_locked(struct pssense_device *pssense)
+{
+	uint64_t timestamp_ns = os_monotonic_get_ns();
+
+	struct pssense_usb_output_report report = {
+	    .seq_no_mode = (pssense->output.next_seq_no << 4) | (0x2),
+	};
+
+	pssense_set_output_report_settings_locked(pssense, &report.settings, true, timestamp_ns);
+
+	int ret = os_hid_write(pssense->hid, (uint8_t *)&report, sizeof(report));
+	if (ret != sizeof(report)) {
+		PSSENSE_WARN(pssense, "Failed to send output report: %d", ret);
+		return ret < 0 ? ret : -EIO;
+	}
+
+	return 0;
+}
+
+static int
+pssense_send_output_report_locked(struct pssense_device *pssense)
+{
+	if (pssense->usb) {
+		return pssense_send_usb_report_locked(pssense);
+	} else {
+		return pssense_send_bluetooth_output_report_locked(pssense);
+	}
+
+	assert(!"unreachable");
+	return -EINVAL;
 }
 
 static void *
@@ -761,18 +832,6 @@ pssense_run_thread(void *ptr)
 #ifdef XRT_OS_LINUX
 	u_linux_try_to_set_realtime_priority_on_thread(pssense->log_level, "PS Sense");
 #endif
-
-	union {
-		uint8_t buffer[sizeof(struct pssense_input_report)];
-		struct pssense_input_report report;
-	} data;
-
-	// The Sense controller starts in compat mode with a different HID report ID and format.
-	// We need to discard packets until we get a correct report.
-	while (pssense_read_packet_data(pssense, data.buffer, sizeof(data), false) &&
-	       data.report.report_id != INPUT_REPORT_ID) {
-		PSSENSE_TRACE(pssense, "Discarding compat mode HID report");
-	}
 
 	os_thread_helper_lock(&pssense->controller_thread);
 
@@ -923,10 +982,9 @@ pssense_get_calibration_data(struct pssense_device *pssense)
 
 		// Calibration has to be read in two parts with two feature reads.
 		for (int i = 0; i < 2; i++) {
-			// no need for initialization, we assert whole size is read
-			struct pssense_feature_report report_buffer;
-			int ret = os_hid_get_feature(pssense->hid, CALIBRATION_DATA_FEATURE_REPORT_ID,
-			                             (uint8_t *)&report_buffer, sizeof(report_buffer));
+			struct pssense_feature_report report_buffer = {.report_id = CALIBRATION_DATA_FEATURE_REPORT_ID};
+			int ret = os_hid_get_feature(pssense->hid, report_buffer.report_id, (uint8_t *)&report_buffer,
+			                             sizeof(report_buffer));
 
 			if (ret < 0) {
 				PSSENSE_ERROR(pssense, "Failed to retrieve calibration report: %d", ret);
@@ -959,7 +1017,8 @@ pssense_get_calibration_data(struct pssense_device *pssense)
 			crc = crc32_le(crc, (uint8_t *)&report_buffer, sizeof(report_buffer) - 4);
 			uint32_t expected_crc = __le32_to_cpu(report_buffer.crc);
 
-			if (crc != expected_crc) {
+			// Only check CRC on Bluetooth, CRC is zeroed out on USB.
+			if (crc != expected_crc && !pssense->usb) {
 				PSSENSE_WARN(pssense, "Invalid feature report CRC. Expected 0x%08X, actual 0x%08X",
 				             expected_crc, crc);
 				invalid_crc = true;
@@ -994,8 +1053,10 @@ saturating_add_uint64(uint64_t a, uint64_t b)
 static void
 pssense_node_break_apart(struct xrt_frame_node *node)
 {
-	// No-op since we don't have any internal structure to break apart.
-	(void)node;
+	struct pssense_device *pssense = from_node(node);
+
+	// Make sure the USB thread is stopped
+	os_thread_helper_stop_and_wait(&pssense->controller_thread);
 }
 
 static void
@@ -1003,10 +1064,35 @@ pssense_node_destroy(struct xrt_frame_node *node)
 {
 	struct pssense_device *pssense = from_node(node);
 
+	// Destroy the controller thread
+	os_thread_helper_destroy(&pssense->controller_thread);
+
+	// Deinit the precise sleeper
+	os_precise_sleeper_deinit(&pssense->sleeper);
+
+	if (pssense->output.pcm_haptics_resampler) {
+		u_resampler_destroy(pssense->output.pcm_haptics_resampler);
+		pssense->output.pcm_haptics_resampler = NULL;
+	}
+
+	m_imu_3dof_close(&pssense->tracking.fusion);
+
+	if (pssense->hid != NULL) {
+		os_hid_destroy(pssense->hid);
+		pssense->hid = NULL;
+	}
+
+	// Relation histories are used from the frame context lifecycle in the constellation tracker device callbacks.
+	m_relation_history_destroy(&pssense->tracking.imu_relation_history);
+	m_relation_history_destroy(&pssense->tracking.constellation_relation_history);
+
 	// LED sync is used on the frame context lifecycle, so it needs to be destroyed in here.
 	t_led_sync_refinement_destroy(&pssense->tracking.led_sync_refinement);
 
-	// Really free the pointer
+	// Remove the variable tracking.
+	u_var_remove_root(pssense);
+
+	// Actually free the pointer
 	free(pssense);
 }
 
@@ -1202,30 +1288,11 @@ pssense_device_destroy(struct xrt_device *xdev)
 {
 	struct pssense_device *pssense = from_device(xdev);
 
-	// Stop and destroy the controller thread
-	os_thread_helper_destroy(&pssense->controller_thread);
+	// Stop the thread helper
+	os_thread_helper_stop_and_wait(&pssense->controller_thread);
 
-	os_precise_sleeper_deinit(&pssense->sleeper);
-
-	if (pssense->output.pcm_haptics_resampler) {
-		u_resampler_destroy(pssense->output.pcm_haptics_resampler);
-		pssense->output.pcm_haptics_resampler = NULL;
-	}
-
-	m_imu_3dof_close(&pssense->tracking.fusion);
-
-	// Remove the variable tracking.
-	u_var_remove_root(pssense);
-
-	if (pssense->hid != NULL) {
-		os_hid_destroy(pssense->hid);
-		pssense->hid = NULL;
-	}
-
-	m_relation_history_destroy(&pssense->tracking.imu_relation_history);
-	m_relation_history_destroy(&pssense->tracking.constellation_relation_history);
-
-	// Don't free the pointer, since that's handled in @ref pssense_node_destroy
+	// Don't free the pointer or destroy any resources,
+	// since they may be needed after device destroy but before node destroy
 }
 
 static xrt_result_t
@@ -1465,7 +1532,9 @@ pssense_create(struct xrt_prober *xp,
 	struct os_hid_device *hid = NULL;
 	int ret;
 
-	ret = xrt_prober_open_hid_interface(xp, xpdev, 0, &hid);
+	// On USB, we need to use interface 2, rather than 0 like on Bluetooth.
+	int iface = xpdev->bus == XRT_BUS_TYPE_USB ? 2 : 0;
+	ret = xrt_prober_open_hid_interface(xp, xpdev, iface, &hid);
 	if (ret != 0) {
 		U_LOG_E("Failed to open HID interface for PlayStation Sense controller!");
 		return NULL;
@@ -1510,6 +1579,8 @@ pssense_create(struct xrt_prober *xp,
 
 	pssense->base.binding_profiles = binding_profiles_pssense;
 	pssense->base.binding_profile_count = ARRAY_SIZE(binding_profiles_pssense);
+
+	pssense->usb = xpdev->bus == XRT_BUS_TYPE_USB;
 
 	m_imu_3dof_init(&pssense->tracking.fusion, M_IMU_3DOF_USE_GRAVITY_DUR_20MS);
 

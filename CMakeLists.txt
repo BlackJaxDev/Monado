@@ -107,18 +107,20 @@ find_package(Vulkan MODULE)
 find_package(HIDAPI MODULE)
 find_package(bluetooth MODULE)
 find_package(OpenHMD MODULE)
-find_package(
-	OpenCV
-	COMPONENTS
-		core
-		calib3d
-		highgui
-		imgproc
-		imgcodecs
-		features2d
-		video
-		CONFIG
+
+set(OPENCV_COMMON_COMPONENTS
+    core
+    highgui
+    imgproc
+    imgcodecs
+    video
 	)
+
+find_package(OpenCV QUIET COMPONENTS ${OPENCV_COMMON_COMPONENTS} calib3d features2d CONFIG)
+if(NOT OpenCV_FOUND)
+	find_package(OpenCV COMPONENTS ${OPENCV_COMMON_COMPONENTS} calib features CONFIG)
+endif()
+
 find_package(Libusb1 MODULE)
 find_package(JPEG MODULE)
 find_package(realsense2 CONFIG)
@@ -431,6 +433,7 @@ option(XRT_FEATURE_OPENXR_INTERACTION_MSFT_HAND "Enable XR_MSFT_hand_interaction
 option(XRT_FEATURE_OPENXR_INTERACTION_OPPO "Enable XR_OPPO_controller_interaction" ON)
 option(XRT_FEATURE_OPENXR_INTERACTION_WINMR "Enable XR_EXT_hp_mixed_reality_controller and XR_EXT_samsung_odyssey_controller" ON)
 option(XRT_FEATURE_OPENXR_INTERACTION_BYTEDANCE "Enable XR_BD_controller_interaction" ON)
+option(XRT_FEATURE_OPENXR_INTERACTION_CONTACTGLOVE2 "Enable XR_MND_contactglove2_interaction" ON)
 option(XRT_FEATURE_OPENXR_INTERACTION_VIVE_COSMOS "Enable XR_HTC_vive_cosmos_controller_interaction" ON)
 option(XRT_FEATURE_OPENXR_INTERACTION_VIVE_FOCUS3 "Enable XR_HTC_vive_focus3_controller_interaction" ON)
 option(XRT_FEATURE_OPENXR_INTERACTION_FB_PROXIMITY "Enable XR_FB_touch_controller_proximity" ON)
@@ -684,6 +687,7 @@ if(XRT_MODULE_OPENXR_STATE_TRACKER)
 	message(STATUS "#    FEATURE_OPENXR_HAPTIC_PCM:                             ${XRT_FEATURE_OPENXR_HAPTIC_PCM}")
 	message(STATUS "#    FEATURE_OPENXR_HEADLESS:                               ${XRT_FEATURE_OPENXR_HEADLESS}")
 	message(STATUS "#    FEATURE_OPENXR_INVERTED_ALPHA:                         ${XRT_FEATURE_OPENXR_INVERTED_ALPHA}")
+	message(STATUS "#    FEATURE_OPENXR_INTERACTION_CONTACTGLOVE2:              ${XRT_FEATURE_OPENXR_INTERACTION_CONTACTGLOVE2}")
 	message(STATUS "#    FEATURE_OPENXR_INTERACTION_EXT_EYE_GAZE:               ${XRT_FEATURE_OPENXR_INTERACTION_EXT_EYE_GAZE}")
 	message(STATUS "#    FEATURE_OPENXR_INTERACTION_EXT_HAND:                   ${XRT_FEATURE_OPENXR_INTERACTION_EXT_HAND}")
 	message(STATUS "#    FEATURE_OPENXR_INTERACTION_EXT_PALM_POSE:              ${XRT_FEATURE_OPENXR_INTERACTION_EXT_PALM_POSE}")

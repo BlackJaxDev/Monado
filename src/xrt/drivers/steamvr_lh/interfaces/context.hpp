@@ -9,12 +9,14 @@
 
 #pragma once
 
+#include <condition_variable>
 #include <unordered_map>
 #include <memory>
 #include <optional>
 #include <chrono>
 #include <deque>
 #include <mutex>
+#include <thread>
 
 #include "openvr_driver.h"
 
@@ -70,7 +72,9 @@ private:
 		vr::VREvent_t inner;
 	};
 	std::deque<Event> events;
+	size_t events_tail{0};
 	std::mutex event_queue_mut;
+	std::condition_variable event_popped;
 
 	Device *
 	prop_container_to_device(vr::PropertyContainerHandle_t handle);
@@ -104,10 +108,29 @@ public:
 	Context(const std::string &steam_install, const std::string &steamvr_install, u_logging_level level);
 
 	// These are owned by monado, context is destroyed when these are destroyed
+	std::mutex devices_mut;
 	class HmdDevice *hmd{nullptr};
 	class ControllerDevice *controller[16]{nullptr};
+	bool in_setup{true};
 	const u_logging_level log_level;
 
+	void
+	wait_for_discover();
+
+	void
+	extend_discover();
+
+private:
+	std::condition_variable discover_cv;
+	std::chrono::steady_clock::time_point discover_end_time;
+	std::atomic<bool> frame_thread_run;
+	std::binary_semaphore frame_thread_event{0};
+	std::thread frame_thread;
+
+	void
+	add_event_locked(vr::VREvent_t event);
+
+public:
 	~Context();
 
 	[[nodiscard]] static std::shared_ptr<Context>
@@ -115,14 +138,8 @@ public:
 	       const std::string &steamvr_install,
 	       std::vector<vr::IServerTrackedDeviceProvider *> providers);
 
-	void
-	run_frame();
-
-	void
-	maybe_run_frame(uint64_t new_frame);
-
-	void
-	add_haptic_event(vr::VREvent_HapticVibration_t event);
+	size_t
+	add_haptic_event(vr::VREvent_HapticVibration_t event, size_t old_event_index);
 
 	void
 	add_vendor_event(vr::EVREventType type, const vr::VREvent_Data_t &data = {})

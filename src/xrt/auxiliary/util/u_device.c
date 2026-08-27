@@ -1,4 +1,5 @@
 // Copyright 2019-2025, Collabora, Ltd.
+// Copyright 2026, NVIDIA CORPORATION.
 // SPDX-License-Identifier: BSL-1.0
 /*!
  * @file
@@ -12,6 +13,7 @@
 
 #include "util/u_device.h"
 #include "util/u_debug.h"
+#include "util/u_device_id.h"
 #include "util/u_device_ni.h"
 #include "util/u_logging.h"
 #include "util/u_misc.h"
@@ -311,6 +313,8 @@ u_device_allocate(enum u_device_alloc_flags flags, size_t size, size_t input_cou
 	char *ptr = U_TYPED_ARRAY_CALLOC(char, total_size);
 	struct xrt_device *xdev = (struct xrt_device *)ptr;
 
+	u_device_id_assign(xdev);
+
 	if (input_count > 0) {
 		xdev->input_count = input_count;
 		xdev->inputs = (struct xrt_input *)(ptr + offset_inputs);
@@ -596,6 +600,10 @@ u_device_populate_function_pointers(struct xrt_device *xdev,
                                     u_device_get_tracked_pose_function_t get_tracked_pose_fn,
                                     u_device_destroy_function_t destroy_fn)
 {
+	if (xdev->id.val == 0) {
+		u_device_id_assign(xdev);
+	}
+
 	if (get_tracked_pose_fn == NULL) {
 		U_LOG_E("Got get_tracked_pose_fn == NULL!");
 		assert(get_tracked_pose_fn != NULL);
@@ -628,7 +636,6 @@ u_device_populate_function_pointers(struct xrt_device *xdev,
 	xdev->set_body_tracking_calibration_override_meta = u_device_ni_set_body_tracking_calibration_override_meta;
 	xdev->set_output = u_device_ni_set_output;
 	xdev->get_output_limits = u_device_ni_get_output_limits;
-	xdev->get_presence = u_device_ni_get_presence;
 	xdev->begin_plane_detection_ext = u_device_ni_begin_plane_detection_ext;
 	xdev->destroy_plane_detection_ext = u_device_ni_destroy_plane_detection_ext;
 	xdev->get_plane_detection_state_ext = u_device_ni_get_plane_detection_state_ext;
@@ -643,6 +650,7 @@ u_device_populate_function_pointers(struct xrt_device *xdev,
 	xdev->get_compositor_info = u_device_ni_get_compositor_info;
 	xdev->begin_feature = u_device_ni_begin_feature;
 	xdev->end_feature = u_device_ni_end_feature;
+	xdev->notify_chirality = u_device_ni_notify_chirality;
 
 	/*
 	 * Same as above, but have default implementation that must available.

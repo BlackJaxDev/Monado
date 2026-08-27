@@ -8,6 +8,7 @@
  * @ingroup xrt_iface
  */
 
+#include "xrt/xrt_config_build.h"
 #include "xrt/xrt_config_drivers.h"
 #include "xrt/xrt_prober.h"
 #include "xrt/xrt_frameserver.h"
@@ -42,14 +43,6 @@
 #include "contactglove/contactglove_interface.h"
 #endif
 
-
-// Require a pixel of this brightness to be included in a blob at all, to help filter out general noise.
-#define RIFT_SENSOR_BLOB_REQUIRED_THRESHOLD 0x40
-// On CV1, the camera tends to detect very little noise, so we can be much more lenient with what pixels are considered
-// for being a blob.
-#define RIFT_SENSOR_PIXEL_THRESHOLD_CV1 0x24
-// On DK2, the camera sees much more noise, so we need to be much stricter about what pixels get included as a blob.
-#define RIFT_SENSOR_PIXEL_THRESHOLD_DK2 0x7f
 
 /*
  *
@@ -189,13 +182,13 @@ rift_estimate_system(struct xrt_builder *xb,
 
 #ifdef XRT_BUILD_DRIVER_PSSENSE
 	struct xrt_prober_device *dev_controller_left =
-	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_LEFT, XRT_BUS_TYPE_BLUETOOTH);
+	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_LEFT, XRT_BUS_TYPE_ANY);
 	if (dev_controller_left != NULL) {
 		estimate->certain.left = true;
 	}
 
 	struct xrt_prober_device *dev_controller_right =
-	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_RIGHT, XRT_BUS_TYPE_BLUETOOTH);
+	    u_builder_find_prober_device(xpdevs, xpdev_count, PSSENSE_VID, PSSENSE_PID_RIGHT, XRT_BUS_TYPE_ANY);
 	if (dev_controller_right != NULL) {
 		estimate->certain.right = true;
 	}
@@ -226,7 +219,7 @@ rift_open_pssense(struct rift_builder *rb,
                   struct xrt_prober *xp,
                   struct xrt_prober_device **xpdevs,
                   size_t xpdev_count,
-                  struct t_builder_roles_helper *tbrh)
+                  struct t_builder_options *tbo)
 {
 #ifdef XRT_BUILD_DRIVER_PSSENSE
 	struct xrt_prober_device *left_xpdev = u_builder_find_prober_device( //
@@ -234,7 +227,7 @@ rift_open_pssense(struct rift_builder *rb,
 	    xpdev_count,                                                     //
 	    PSSENSE_VID,                                                     //
 	    PSSENSE_PID_LEFT,                                                //
-	    XRT_BUS_TYPE_BLUETOOTH);
+	    XRT_BUS_TYPE_ANY);
 
 	if (left_xpdev != NULL) {
 		struct t_timing_event_sink *timing_sink;
@@ -243,7 +236,7 @@ rift_open_pssense(struct rift_builder *rb,
 			RIFT_ERROR(rb, "PS Sense left controller device creation failed.");
 		} else {
 			xsysd->static_xdevs[xsysd->static_xdev_count++] = left_xdev;
-			tbrh->left = left_xdev;
+			tbo->left = left_xdev;
 
 			if (rb->timing_event_source != NULL) {
 				t_timing_event_source_add_sink(rb->timing_event_source, timing_sink);
@@ -258,7 +251,7 @@ rift_open_pssense(struct rift_builder *rb,
 	    xpdev_count,                                                      //
 	    PSSENSE_VID,                                                      //
 	    PSSENSE_PID_RIGHT,                                                //
-	    XRT_BUS_TYPE_BLUETOOTH);
+	    XRT_BUS_TYPE_ANY);
 
 	if (right_xpdev != NULL) {
 		struct t_timing_event_sink *timing_sink;
@@ -267,7 +260,7 @@ rift_open_pssense(struct rift_builder *rb,
 			RIFT_ERROR(rb, "PS Sense right controller device creation failed.");
 		} else {
 			xsysd->static_xdevs[xsysd->static_xdev_count++] = right_xdev;
-			tbrh->right = right_xdev;
+			tbo->right = right_xdev;
 
 			if (rb->timing_event_source != NULL) {
 				t_timing_event_source_add_sink(rb->timing_event_source, timing_sink);
@@ -285,7 +278,7 @@ rift_open_contactglove(struct rift_builder *rb,
                        struct xrt_prober *xp,
                        struct xrt_prober_device **xpdevs,
                        size_t xpdev_count,
-                       struct t_builder_roles_helper *tbrh)
+                       struct t_builder_options *tbo)
 {
 #ifdef XRT_BUILD_DRIVER_CONTACTGLOVE
 	xrt_result_t ret;
@@ -323,12 +316,12 @@ rift_open_contactglove(struct rift_builder *rb,
 			xsysd->static_xdev_count += ret;
 
 			// Fill in the devices into the static xdev array.
-			tbrh->left = xsysd->static_xdevs[xsysd->static_xdev_count - 2];
-			tbrh->right = xsysd->static_xdevs[xsysd->static_xdev_count - 1];
+			tbo->left = xsysd->static_xdevs[xsysd->static_xdev_count - 2];
+			tbo->right = xsysd->static_xdevs[xsysd->static_xdev_count - 1];
 
 			// Set the hand tracking roles to the gloves
-			tbrh->hand_tracking.unobstructed.left = tbrh->left;
-			tbrh->hand_tracking.unobstructed.right = tbrh->right;
+			tbo->hand_tracking.unobstructed.left = tbo->left;
+			tbo->hand_tracking.unobstructed.right = tbo->right;
 			RIFT_DEBUG(rb, "Created ContactGlove devices for serial number %s", serial_number);
 		} else {
 			RIFT_ERROR(rb, "Failed to create ContactGlove devices with code %d.", ret);
@@ -374,7 +367,7 @@ rift_open_system_impl(struct xrt_builder *xb,
                       struct xrt_tracking_origin *origin,
                       struct xrt_system_devices *xsysd,
                       struct xrt_frame_context *xfctx,
-                      struct t_builder_roles_helper *tbrh)
+                      struct t_builder_options *tbo)
 {
 	struct rift_builder *rb = rift_builder(xb);
 
@@ -461,17 +454,17 @@ rift_open_system_impl(struct xrt_builder *xb,
 		for (int i = 0; i < created_devices; i++) {
 			struct xrt_device *xdev = xdevs[i];
 			switch (xdev->device_type) {
-			case XRT_DEVICE_TYPE_HMD: tbrh->head = xdev; break;
-			case XRT_DEVICE_TYPE_LEFT_HAND_CONTROLLER: tbrh->left = xdev; break;
-			case XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER: tbrh->right = xdev; break;
-			case XRT_DEVICE_TYPE_GAMEPAD: tbrh->gamepad = xdev; break;
+			case XRT_DEVICE_TYPE_HMD: tbo->head = xdev; break;
+			case XRT_DEVICE_TYPE_LEFT_HAND_CONTROLLER: tbo->left = xdev; break;
+			case XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER: tbo->right = xdev; break;
+			case XRT_DEVICE_TYPE_GAMEPAD: tbo->gamepad = xdev; break;
 			default: break;
 			}
 		}
 	}
 
-	rift_open_pssense(rb, xfctx, xsysd, xp, xpdevs, xpdev_count, tbrh);
-	rift_open_contactglove(rb, xsysd, xp, xpdevs, xpdev_count, tbrh);
+	rift_open_pssense(rb, xfctx, xsysd, xp, xpdevs, xpdev_count, tbo);
+	rift_open_contactglove(rb, xsysd, xp, xpdevs, xpdev_count, tbo);
 
 	xret = xrt_prober_unlock_list(xp, &xpdevs);
 	if (xret != XRT_SUCCESS) {
@@ -580,16 +573,21 @@ rift_open_system_impl(struct xrt_builder *xb,
 
 			struct xrt_frame_sink *frame_sink;
 			struct t_rift_blobwatch_params params = {
-			    .pixel_threshold = variant == RIFT_VARIANT_CV1 ? RIFT_SENSOR_PIXEL_THRESHOLD_CV1
-			                                                   : RIFT_SENSOR_PIXEL_THRESHOLD_DK2,
-			    .blob_required_threshold = RIFT_SENSOR_BLOB_REQUIRED_THRESHOLD,
-			    .max_match_dist = 50.0f,
+			    .pixel_threshold = variant == RIFT_VARIANT_CV1 ? RIFT_BLOBWATCH_PIXEL_THRESHOLD_CV1
+			                                                   : RIFT_BLOBWATCH_PIXEL_THRESHOLD_DK2,
+			    .blob_required_threshold = RIFT_BLOBWATCH_BLOB_REQUIRED_THRESHOLD,
+			    .max_match_dist = RIFT_BLOBWATCH_DEFAULT_MAX_MATCH_DIST,
+			    .max_blob_width = RIFT_BLOBWATCH_DEFAULT_MAX_BLOB_WIDTH,
 			};
 			ret = t_rift_blobwatch_create(&params, xfctx, blob_sink, &frame_sink, blobwatch);
 			if (ret != 0) {
 				RIFT_WARN(rb, "Failed to create Rift blobwatch for sensor %u with code %d", i, ret);
 				continue;
 			}
+
+#ifdef XRT_FEATURE_RERUN
+			t_rift_blobwatch_set_rerun_data(*blobwatch, rb->constellation_tracker, 0, rb->num_sensors);
+#endif
 
 			u_sink_create_format_converter(xfctx, XRT_FORMAT_L8, frame_sink, &frame_sink);
 

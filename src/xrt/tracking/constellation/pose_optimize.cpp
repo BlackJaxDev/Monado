@@ -20,10 +20,16 @@
 
 #include "camera_model.h"
 
-#include <opencv2/calib3d/calib3d.hpp>
+#include <opencv2/core/version.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
-#if CV_MAJOR_VERSION >= 4
+#if CV_MAJOR_VERSION >= 5
+#include <opencv2/geometry/3d.hpp>
+#else
+#include <opencv2/calib3d/calib3d.hpp>
+#endif
+
+#if CV_MAJOR_VERSION >= 4 && CV_MAJOR_VERSION < 5
 #include <opencv2/calib3d/calib3d_c.h>
 #endif
 
