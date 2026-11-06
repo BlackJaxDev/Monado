@@ -13,9 +13,11 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <math.h>
 #include "xrt/xrt_compiler.h"
 #include "main/comp_window.h"
 #include "util/u_misc.h"
+#include "util/u_simulated_eye_gaze.h"
 #include "os/os_threading.h"
 
 
@@ -49,6 +51,9 @@ struct comp_window_mswin
 
 	char base_title[64];
 	char current_title[256];
+
+	//! A WM_MOUSELEAVE request is active for the window.
+	bool tracking_mouse_leave;
 };
 
 static WCHAR szWindowClass[] = L"Monado";
@@ -64,6 +69,10 @@ static WCHAR szWindowData[] = L"MonadoWindow";
 #define SIMULATED_HMD_POSE_MODE_USER_INPUT "user_input"
 #define ID_SIMULATED_HMD_POSE_WOBBLE 50001
 #define ID_SIMULATED_HMD_POSE_USER_INPUT 50003
+#define ID_SIMULATED_EYE_GAZE_OFF 50010
+#define ID_SIMULATED_EYE_GAZE_HOVER 50011
+#define ID_SIMULATED_EYE_GAZE_CLICK 50012
+#define ID_SIMULATED_EYE_GAZE_CENTER 50013
 
 #define COMP_ERROR_GETLASTERROR(C, MSG_WITH_PLACEHOLDER, MSG_WITHOUT_PLACEHOLDER)                                      \
 	do {                                                                                                           \
@@ -105,8 +114,39 @@ set_simulated_hmd_pose_mode(const char *mode)
 	SetEnvironmentVariableA(SIMULATED_HMD_POSE_MODE_ENV, mode);
 }
 
+static UINT
+get_eye_gaze_mode_check_flag(enum u_simulated_eye_gaze_mode mode)
+{
+	return u_simulated_eye_gaze_get_mode() == mode ? MF_CHECKED : MF_UNCHECKED;
+}
+
+static bool
+device_has_simulated_eye_gaze(struct comp_window_mswin *cwm)
+{
+	struct xrt_device *xdev = cwm->base.base.c->xdev;
+	return xdev != NULL && xdev->supported.eye_gaze;
+}
+
 static void
-show_simulated_hmd_pose_menu(HWND window, LPARAM lParam)
+append_eye_gaze_menu_items(struct comp_window_mswin *cwm, HMENU menu)
+{
+	AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+	if (!device_has_simulated_eye_gaze(cwm)) {
+		AppendMenuA(menu, MF_STRING | MF_GRAYED, 0, "Mouse eye gaze: off (start with SIMULATED_EYE_GAZE=hover)");
+		return;
+	}
+
+	AppendMenuA(menu, MF_STRING | get_eye_gaze_mode_check_flag(U_SIMULATED_EYE_GAZE_MODE_HOVER),
+	            ID_SIMULATED_EYE_GAZE_HOVER, "Eye gaze follows mouse hover");
+	AppendMenuA(menu, MF_STRING | get_eye_gaze_mode_check_flag(U_SIMULATED_EYE_GAZE_MODE_CLICK),
+	            ID_SIMULATED_EYE_GAZE_CLICK, "Eye gaze follows left click / drag");
+	AppendMenuA(menu, MF_STRING | get_eye_gaze_mode_check_flag(U_SIMULATED_EYE_GAZE_MODE_OFF),
+	            ID_SIMULATED_EYE_GAZE_OFF, "Eye gaze fixed straight ahead");
+	AppendMenuA(menu, MF_STRING, ID_SIMULATED_EYE_GAZE_CENTER, "Reset eye gaze to straight ahead");
+}
+
+static void
+show_simulated_hmd_pose_menu(struct comp_window_mswin *cwm, HWND window, LPARAM lParam)
 {
 	POINT point = {0};
 	if ((int)(short)LOWORD(lParam) == -1 && (int)(short)HIWORD(lParam) == -1) {
@@ -129,6 +169,7 @@ show_simulated_hmd_pose_menu(HWND window, LPARAM lParam)
 	AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
 	AppendMenuA(menu, MF_STRING | MF_GRAYED, 0, "WASD/QE move, up/down pitch, left/right yaw, comma/period roll");
 	AppendMenuA(menu, MF_STRING | MF_GRAYED, 0, "Hold Shift to yaw faster");
+	append_eye_gaze_menu_items(cwm, menu);
 
 	SetForegroundWindow(window);
 	UINT command = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, point.x, point.y, 0, window, NULL);
@@ -137,6 +178,10 @@ show_simulated_hmd_pose_menu(HWND window, LPARAM lParam)
 	switch (command) {
 	case ID_SIMULATED_HMD_POSE_WOBBLE: set_simulated_hmd_pose_mode(SIMULATED_HMD_POSE_MODE_WOBBLE); break;
 	case ID_SIMULATED_HMD_POSE_USER_INPUT: set_simulated_hmd_pose_mode(SIMULATED_HMD_POSE_MODE_USER_INPUT); break;
+	case ID_SIMULATED_EYE_GAZE_OFF: u_simulated_eye_gaze_set_mode(U_SIMULATED_EYE_GAZE_MODE_OFF); break;
+	case ID_SIMULATED_EYE_GAZE_HOVER: u_simulated_eye_gaze_set_mode(U_SIMULATED_EYE_GAZE_MODE_HOVER); break;
+	case ID_SIMULATED_EYE_GAZE_CLICK: u_simulated_eye_gaze_set_mode(U_SIMULATED_EYE_GAZE_MODE_CLICK); break;
+	case ID_SIMULATED_EYE_GAZE_CENTER: u_simulated_eye_gaze_clear(); break;
 	default: break;
 	}
 }
@@ -150,6 +195,90 @@ static void
 draw_window(HWND hWnd, struct comp_window_mswin *cwm)
 {
 	ValidateRect(hWnd, NULL);
+}
+
+/*!
+ * Finds the view under a client-area point and its normalized position in that view. This uses the
+ * same centered aspect fit as calc_viewport_data in comp_renderer.c, without pre-rotation, which
+ * a desktop window never uses.
+ */
+static bool
+window_point_to_view(struct comp_window_mswin *cwm, int x, int y, uint32_t *out_view, float *out_u, float *out_v)
+{
+	struct comp_target *ct = &cwm->base.base;
+	struct xrt_device *xdev = ct->c->xdev;
+	if (xdev == NULL || xdev->hmd == NULL) {
+		return false;
+	}
+
+	double screen_w = (double)xdev->hmd->screens[0].w_pixels;
+	double screen_h = (double)xdev->hmd->screens[0].h_pixels;
+	double target_w = (double)ct->width;
+	double target_h = (double)ct->height;
+	if (screen_w <= 0.0 || screen_h <= 0.0 || target_w <= 0.0 || target_h <= 0.0) {
+		return false;
+	}
+
+	double fit_w = target_w;
+	double fit_h = floor(target_w * screen_h / screen_w);
+	if (fit_h > target_h) {
+		fit_h = target_h;
+		fit_w = floor(target_h * screen_w / screen_h);
+	}
+	double origin_x = floor((target_w - fit_w) / 2.0);
+	double origin_y = floor((target_h - fit_h) / 2.0);
+
+	// Window point to HMD screen pixels.
+	double px = ((double)x - origin_x) * screen_w / fit_w;
+	double py = ((double)y - origin_y) * screen_h / fit_h;
+
+	uint32_t view_count = xdev->hmd->view_count;
+	for (uint32_t i = 0; i < view_count && i < XRT_MAX_VIEWS; i++) {
+		const struct xrt_view *view = &xdev->hmd->views[i];
+		double vx = (double)view->viewport.x_pixels;
+		double vy = (double)view->viewport.y_pixels;
+		double vw = (double)view->viewport.w_pixels;
+		double vh = (double)view->viewport.h_pixels;
+		if (vw <= 0.0 || vh <= 0.0 || px < vx || py < vy || px >= vx + vw || py >= vy + vh) {
+			continue;
+		}
+
+		*out_view = i;
+		*out_u = (float)((px - vx) / vw);
+		*out_v = (float)((py - vy) / vh);
+		return true;
+	}
+
+	return false;
+}
+
+static void
+handle_eye_gaze_mouse(struct comp_window_mswin *cwm, HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	if (!device_has_simulated_eye_gaze(cwm)) {
+		return;
+	}
+
+	if (!cwm->tracking_mouse_leave) {
+		TRACKMOUSEEVENT tme = {.cbSize = sizeof(tme), .dwFlags = TME_LEAVE, .hwndTrack = hWnd};
+		cwm->tracking_mouse_leave = TrackMouseEvent(&tme) != 0;
+	}
+
+	enum u_simulated_eye_gaze_mode mode = u_simulated_eye_gaze_get_mode();
+	bool left_down = (wParam & MK_LBUTTON) != 0 || message == WM_LBUTTONDOWN;
+	bool apply = mode == U_SIMULATED_EYE_GAZE_MODE_HOVER || (mode == U_SIMULATED_EYE_GAZE_MODE_CLICK && left_down);
+	if (!apply) {
+		return;
+	}
+
+	uint32_t view_index = 0;
+	float u = 0.0f;
+	float v = 0.0f;
+	int x = (int)(short)LOWORD(lParam);
+	int y = (int)(short)HIWORD(lParam);
+	if (window_point_to_view(cwm, x, y, &view_index, &u, &v)) {
+		u_simulated_eye_gaze_set(view_index, u, v);
+	}
 }
 
 static LRESULT CALLBACK
@@ -181,8 +310,31 @@ WndProc(HWND hWnd, unsigned int message, WPARAM wParam, LPARAM lParam)
 		break;
 	}
 	case WM_CONTEXTMENU:
-		show_simulated_hmd_pose_menu(hWnd, lParam);
+		show_simulated_hmd_pose_menu(cwm, hWnd, lParam);
 		break;
+	case WM_MOUSEMOVE:
+	case WM_LBUTTONDOWN:
+		// The gaze keeps its last point when the mouse leaves an eye or the window.
+		handle_eye_gaze_mouse(cwm, hWnd, message, wParam, lParam);
+		if (message == WM_LBUTTONDOWN) {
+			SetCapture(hWnd);
+		}
+		break;
+	case WM_LBUTTONUP:
+		if (GetCapture() == hWnd) {
+			ReleaseCapture();
+		}
+		break;
+	case WM_MOUSELEAVE:
+		cwm->tracking_mouse_leave = false;
+		break;
+	case WM_SETCURSOR:
+		if (LOWORD(lParam) == HTCLIENT && device_has_simulated_eye_gaze(cwm) &&
+		    u_simulated_eye_gaze_get_mode() != U_SIMULATED_EYE_GAZE_MODE_OFF) {
+			SetCursor(LoadCursor(NULL, IDC_CROSS));
+			return TRUE;
+		}
+		return DefWindowProcW(hWnd, message, wParam, lParam);
 	case WM_QUIT:
 		// COMP_INFO(c, "WM_QUIT");
 		PostQuitMessage(0);
@@ -512,6 +664,7 @@ comp_window_mswin_thread(struct comp_window_mswin *cwm)
 	wcex.hInstance = cwm->instance;
 	wcex.lpszClassName = szWindowClass;
 	wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+	wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
 //! @todo icon
 #if 0
 	wcex.hIcon          = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_SAMPLEGUI));

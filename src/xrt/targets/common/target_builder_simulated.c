@@ -131,6 +131,9 @@ simulated_open_system_impl(struct xrt_builder *xb,
 
 	// Assign to role(s).
 	tbo->head = head;
+	if (head->supported.eye_gaze) {
+		tbo->eyes = head;
+	}
 	tbo->left = left;
 	tbo->right = right;
 

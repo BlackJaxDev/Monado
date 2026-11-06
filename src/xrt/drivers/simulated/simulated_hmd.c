@@ -20,6 +20,7 @@
 #include "util/u_logging.h"
 #include "util/u_misc.h"
 #include "util/u_pretty_print.h"
+#include "util/u_simulated_eye_gaze.h"
 #include "util/u_time.h"
 #include "util/u_var.h"
 
@@ -60,6 +61,9 @@ struct simulated_hmd
 
 	enum u_logging_level log_level;
 	enum simulated_movement movement;
+
+	//! The HMD reports XR_EXT_eye_gaze_interaction from the mouse on the compositor window.
+	bool simulated_eye_gaze;
 };
 
 
@@ -79,6 +83,8 @@ DEBUG_GET_ONCE_LOG_OPTION(simulated_log, "SIMULATED_LOG", U_LOGGING_WARN)
 DEBUG_GET_ONCE_NUM_OPTION(view_count, "SIMULATED_VIEW_COUNT", 2)
 DEBUG_GET_ONCE_NUM_OPTION(display_width, "SIMULATED_DISPLAY_WIDTH", 1280)
 DEBUG_GET_ONCE_NUM_OPTION(display_height, "SIMULATED_DISPLAY_HEIGHT", 720)
+// Same variable and default as the OpenXR state tracker, so the gaze origin is on the app's eye.
+DEBUG_GET_ONCE_NUM_OPTION(eye_gaze_ipd_mm, "OXR_DEBUG_IPD_MM", 63)
 
 #define SIMULATED_HMD_POSE_MODE_ENV "SIMULATED_HMD_POSE_MODE"
 #define SIMULATED_HMD_POSE_MODE_WOBBLE "wobble"
@@ -90,6 +96,13 @@ DEBUG_GET_ONCE_NUM_OPTION(display_height, "SIMULATED_DISPLAY_HEIGHT", 720)
 #define SIMULATED_HMD_USER_INPUT_YAW_RATE_RAD_PER_S ((float)(45.0 * M_PI / 180.0))
 #define SIMULATED_HMD_USER_INPUT_FAST_YAW_MULTIPLIER 4.0f
 #define SIMULATED_HMD_USER_INPUT_EASE_RATE 8.0f
+
+enum simulated_hmd_input
+{
+	SIMULATED_HMD_INPUT_HEAD_POSE,
+	SIMULATED_HMD_INPUT_EYE_GAZE_POSE,
+	SIMULATED_HMD_INPUT_COUNT,
+};
 
 #define HMD_TRACE(hmd, ...) U_LOG_XDEV_IFL_T(&hmd->base, hmd->log_level, __VA_ARGS__)
 #define HMD_DEBUG(hmd, ...) U_LOG_XDEV_IFL_D(&hmd->base, hmd->log_level, __VA_ARGS__)
@@ -221,19 +234,9 @@ simulated_hmd_destroy(struct xrt_device *xdev)
 	u_device_free(&dh->base);
 }
 
-static xrt_result_t
-simulated_hmd_get_tracked_pose(struct xrt_device *xdev,
-                               enum xrt_input_name name,
-                               int64_t at_timestamp_ns,
-                               struct xrt_space_relation *out_relation)
+static void
+update_head_pose(struct simulated_hmd *hmd, enum simulated_movement movement, int64_t at_timestamp_ns)
 {
-	struct simulated_hmd *hmd = simulated_hmd(xdev);
-
-	if (name != XRT_INPUT_GENERIC_HEAD_POSE) {
-		U_LOG_XDEV_UNSUPPORTED_INPUT(&hmd->base, hmd->log_level, name);
-		return XRT_ERROR_INPUT_UNSUPPORTED;
-	}
-
 	const double time_s = time_ns_to_s(at_timestamp_ns - hmd->created_ns);
 	const double d = hmd->diameter_m;
 	const double d2 = d * 2;
@@ -243,7 +246,6 @@ simulated_hmd_get_tracked_pose(struct xrt_device *xdev,
 	const double t4 = t * 4;
 	const struct xrt_vec3 up = {0, 1, 0};
 
-	enum simulated_movement movement = get_active_movement(hmd);
 	if (movement != SIMULATED_MOVEMENT_USER_INPUT) {
 		reset_user_input_pose(hmd);
 	}
@@ -281,8 +283,78 @@ simulated_hmd_get_tracked_pose(struct xrt_device *xdev,
 		apply_user_input_pose(hmd, at_timestamp_ns);
 		break;
 	}
+}
+
+/*!
+ * Gets the gaze relative to the head. The mouse sets a point on one view. The gaze starts at that
+ * eye and goes through that point, so the app finds the point at the same place on that view.
+ * Without a point, the gaze looks straight ahead from the center of the head.
+ */
+static void
+get_eye_gaze_in_head(struct simulated_hmd *hmd, struct xrt_pose *out_pose)
+{
+	*out_pose = (struct xrt_pose)XRT_POSE_IDENTITY;
+
+	struct u_simulated_eye_gaze_sample sample;
+	u_simulated_eye_gaze_get(&sample);
+	if (!sample.valid || sample.view_index >= hmd->base.hmd->view_count) {
+		return;
+	}
+
+	const struct xrt_fov *fov = &hmd->base.hmd->distortion.fov[sample.view_index];
+	float tan_left = tanf(fov->angle_left);
+	float tan_right = tanf(fov->angle_right);
+	float tan_up = tanf(fov->angle_up);
+	float tan_down = tanf(fov->angle_down);
+
+	// The view image is linear in tangent space and v grows downward.
+	struct xrt_vec3 direction = {
+	    tan_left + sample.u * (tan_right - tan_left),
+	    tan_up + sample.v * (tan_down - tan_up),
+	    -1.0f,
+	};
+	math_vec3_normalize(&direction);
+
+	const struct xrt_vec3 forward = {0.0f, 0.0f, -1.0f};
+	math_quat_from_vec_a_to_vec_b(&forward, &direction, &out_pose->orientation);
+
+	if (hmd->base.hmd->view_count >= 2) {
+		const struct xrt_vec3 eye_relation = {(float)debug_get_num_option_eye_gaze_ipd_mm() / 1000.0f, 0.0f,
+		                                      0.0f};
+		struct xrt_pose eye_pose;
+		u_device_get_view_pose(&eye_relation, sample.view_index, &eye_pose);
+		out_pose->position = eye_pose.position;
+	}
+}
+
+static xrt_result_t
+simulated_hmd_get_tracked_pose(struct xrt_device *xdev,
+                               enum xrt_input_name name,
+                               int64_t at_timestamp_ns,
+                               struct xrt_space_relation *out_relation)
+{
+	struct simulated_hmd *hmd = simulated_hmd(xdev);
+
+	bool eye_gaze = hmd->simulated_eye_gaze && name == XRT_INPUT_GENERIC_EYE_GAZE_POSE;
+	if (name != XRT_INPUT_GENERIC_HEAD_POSE && !eye_gaze) {
+		U_LOG_XDEV_UNSUPPORTED_INPUT(&hmd->base, hmd->log_level, name);
+		return XRT_ERROR_INPUT_UNSUPPORTED;
+	}
+
+	enum simulated_movement movement = get_active_movement(hmd);
+
+	// User input integrates keys over time; a gaze query must not step it a second time.
+	if (!eye_gaze || movement != SIMULATED_MOVEMENT_USER_INPUT) {
+		update_head_pose(hmd, movement, at_timestamp_ns);
+	}
 
 	out_relation->pose = hmd->pose;
+	if (eye_gaze) {
+		struct xrt_pose gaze_in_head;
+		get_eye_gaze_in_head(hmd, &gaze_in_head);
+		math_pose_transform(&hmd->pose, &gaze_in_head, &out_relation->pose);
+	}
+
 	out_relation->relation_flags = (enum xrt_space_relation_flags)(XRT_SPACE_RELATION_ORIENTATION_VALID_BIT |
 	                                                               XRT_SPACE_RELATION_POSITION_VALID_BIT |
 	                                                               XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT);
@@ -318,6 +390,19 @@ simulated_ref_space_usage(struct xrt_device *xdev,
 	return XRT_SUCCESS;
 }
 
+static struct xrt_binding_input_pair eye_gaze_inputs_simulated[] = {
+    {XRT_INPUT_GENERIC_EYE_GAZE_POSE, XRT_INPUT_GENERIC_EYE_GAZE_POSE},
+};
+
+static struct xrt_binding_profile simulated_hmd_eye_gaze_binding_profiles[] = {
+    {
+        .name = XRT_DEVICE_EYE_GAZE_INTERACTION,
+        .inputs = eye_gaze_inputs_simulated,
+        .input_count = ARRAY_SIZE(eye_gaze_inputs_simulated),
+    },
+};
+
+
 /*
  *
  * 'Exported' functions.
@@ -335,7 +420,10 @@ simulated_hmd_create(enum simulated_movement movement, const struct xrt_pose *ce
 {
 	enum u_device_alloc_flags flags =
 	    (enum u_device_alloc_flags)(U_DEVICE_ALLOC_HMD | U_DEVICE_ALLOC_TRACKING_NONE);
-	struct simulated_hmd *hmd = U_DEVICE_ALLOCATE(struct simulated_hmd, flags, 1, 0);
+	// The eye gaze extension is reported at system creation, so the mode at startup decides it.
+	bool simulated_eye_gaze = u_simulated_eye_gaze_get_mode() != U_SIMULATED_EYE_GAZE_MODE_OFF;
+	size_t input_count = simulated_eye_gaze ? SIMULATED_HMD_INPUT_COUNT : 1;
+	struct simulated_hmd *hmd = U_DEVICE_ALLOCATE(struct simulated_hmd, flags, input_count, 0);
 	hmd->base.update_inputs = u_device_noop_update_inputs;
 	hmd->base.get_tracked_pose = simulated_hmd_get_tracked_pose;
 	hmd->base.get_view_poses = u_device_get_view_poses;
@@ -358,7 +446,14 @@ simulated_hmd_create(enum simulated_movement movement, const struct xrt_pose *ce
 	snprintf(hmd->base.serial, XRT_DEVICE_NAME_LEN, "Simulated HMD");
 
 	// Setup input.
-	hmd->base.inputs[0].name = XRT_INPUT_GENERIC_HEAD_POSE;
+	hmd->base.inputs[SIMULATED_HMD_INPUT_HEAD_POSE].name = XRT_INPUT_GENERIC_HEAD_POSE;
+	hmd->simulated_eye_gaze = simulated_eye_gaze;
+	if (simulated_eye_gaze) {
+		hmd->base.inputs[SIMULATED_HMD_INPUT_EYE_GAZE_POSE].name = XRT_INPUT_GENERIC_EYE_GAZE_POSE;
+		hmd->base.binding_profiles = simulated_hmd_eye_gaze_binding_profiles;
+		hmd->base.binding_profile_count = ARRAY_SIZE(simulated_hmd_eye_gaze_binding_profiles);
+		hmd->base.supported.eye_gaze = true;
+	}
 
 	// Setup info.
 	bool ret = true;

@@ -225,6 +225,8 @@ endif()
 
 add_library(
 	aux_util_sink STATIC
+	u_simulated_eye_gaze.c
+	u_simulated_eye_gaze.h
 	u_sink.h
 	u_sink_blob_visualizer.c
 	u_sink_combiner.c
