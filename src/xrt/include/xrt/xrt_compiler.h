@@ -198,7 +198,8 @@ xrt_atomic_s32_cmpxchg(xrt_atomic_s32_t *p, int32_t old_, int32_t new_)
 #if defined(__GNUC__)
 	return __sync_val_compare_and_swap(p, old_, new_);
 #elif defined(_MSC_VER)
-	return InterlockedCompareExchange((volatile LONG *)p, old_, new_);
+	// The Windows API takes the new value before the comparand.
+	return InterlockedCompareExchange((volatile LONG *)p, new_, old_);
 #else
 #error "compiler not supported"
 #endif
@@ -256,7 +257,8 @@ xrt_atomic_s64_cmpxchg(xrt_atomic_s64_t *p, int64_t old_, int64_t new_)
 #if defined(__GNUC__)
 	return __sync_val_compare_and_swap(p, old_, new_);
 #elif defined(_MSC_VER)
-	return InterlockedCompareExchange64((volatile LONG64 *)p, old_, new_);
+	// The Windows API takes the new value before the comparand.
+	return InterlockedCompareExchange64((volatile LONG64 *)p, new_, old_);
 #else
 #error "compiler not supported"
 #endif

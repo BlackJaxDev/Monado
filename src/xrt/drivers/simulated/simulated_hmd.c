@@ -363,6 +363,24 @@ simulated_hmd_get_tracked_pose(struct xrt_device *xdev,
 }
 
 static xrt_result_t
+simulated_hmd_begin_feature(struct xrt_device *xdev, enum xrt_device_feature_type type)
+{
+	struct simulated_hmd *hmd = simulated_hmd(xdev);
+
+	// The gaze always comes from the mouse, so there is nothing to start or stop.
+	if (type == XRT_DEVICE_FEATURE_EYE_TRACKING && hmd->simulated_eye_gaze) {
+		return XRT_SUCCESS;
+	}
+	return XRT_ERROR_FEATURE_NOT_SUPPORTED;
+}
+
+static xrt_result_t
+simulated_hmd_end_feature(struct xrt_device *xdev, enum xrt_device_feature_type type)
+{
+	return simulated_hmd_begin_feature(xdev, type);
+}
+
+static xrt_result_t
 simulated_ref_space_usage(struct xrt_device *xdev,
                           enum xrt_reference_space_type type,
                           enum xrt_input_name name,
@@ -429,6 +447,8 @@ simulated_hmd_create(enum simulated_movement movement, const struct xrt_pose *ce
 	hmd->base.get_view_poses = u_device_get_view_poses;
 	hmd->base.get_visibility_mask = u_device_get_visibility_mask;
 	hmd->base.ref_space_usage = simulated_ref_space_usage;
+	hmd->base.begin_feature = simulated_hmd_begin_feature;
+	hmd->base.end_feature = simulated_hmd_end_feature;
 	hmd->base.destroy = simulated_hmd_destroy;
 	hmd->base.name = XRT_DEVICE_GENERIC_HMD;
 	hmd->base.device_type = XRT_DEVICE_TYPE_HMD;
